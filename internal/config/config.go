@@ -43,17 +43,24 @@ func (p *ProjectConfig) Dir() string {
 
 // DAGConfig holds the DAG-level settings.
 type DAGConfig struct {
-	Name     string   `toml:"name"`
-	Schedule string   `toml:"schedule"`
-	Overlap  string   `toml:"overlap"`
-	Timeout  Duration `toml:"timeout"`
-	Requires []string `toml:"requires"`
+	Name     string    `toml:"name"`
+	Schedule string    `toml:"schedule"`
+	Overlap  string    `toml:"overlap"`
+	Timeout  Duration  `toml:"timeout"`
+	Requires []string  `toml:"requires"`
+	SQL      SQLConfig `toml:"sql"`
+}
+
+// SQLConfig holds the default SQL connection for a project's .sql tasks.
+type SQLConfig struct {
+	Connection string `toml:"connection"`
 }
 
 // TaskConfig holds a single task definition.
 type TaskConfig struct {
 	Name       string   `toml:"name"`
 	Script     string   `toml:"script"`
+	Runner     string   `toml:"runner"`
 	DependsOn  []string `toml:"depends_on"`
 	Timeout    Duration `toml:"timeout"`
 	Retries    int      `toml:"retries"`

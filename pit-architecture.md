@@ -1,14 +1,15 @@
 # Pit — Lightweight Data Orchestration
 
-A minimal, opinionated orchestration tool for small-to-medium data teams. Go orchestrator, Python tasks via UV, DuckLake for inter-task data, SQLite for metadata.
+A minimal, opinionated orchestration tool for small-to-medium data teams. Go orchestrator, language-agnostic task execution, DuckLake for inter-task data, SQLite for metadata.
 
 ---
 
 ## Philosophy
 
-- Tasks are just scripts. No decorators, no magic, no framework lock-in.
-- Projects are just Python packages. LSP, autocomplete, and type checking work out of the box.
-- Go connectors are the recommended path for I/O where Go excels (MSSQL, bulk insert, SMTP), but tasks can use any Python library directly. It's your code.
+- Tasks are just executables. Python scripts, shell scripts, SQL files, or anything with an exit code. No decorators, no magic, no framework lock-in.
+- Python projects are standard packages. LSP, autocomplete, and type checking work out of the box. But Python is optional — a project can be pure SQL or shell scripts.
+- Go connectors are the recommended path for I/O where Go excels (MSSQL, bulk insert, SMTP), but tasks can use any library directly. It's your code.
+- SQL files are first-class tasks. The Go SQL operator runs `.sql` files directly against configured database connections — no Python dependency required.
 - The orchestrator is a single binary. The deployment is a git pull.
 - Only build what's needed. Add complexity when someone asks for it twice.
 
@@ -16,31 +17,36 @@ A minimal, opinionated orchestration tool for small-to-medium data teams. Go orc
 
 ## Project Structure
 
-Everything is organised by project. Each project is a self-contained pipeline with its own DAG definition, tasks, dependencies, and shared code — structured as a standard Python package.
+Everything is organised by project. Each project is a self-contained pipeline with its own DAG definition, tasks, and (optionally) dependencies and shared code. The structure adapts to what the project needs — Python projects get a full package layout, SQL-only or shell-only projects stay minimal.
 
 ```
 projects/
-├── claims_pipeline/
-│   ├── pit.toml              # DAG definition
-│   ├── pyproject.toml        # Python deps + package config
+├── claims_pipeline/           # Python project — full package layout
+│   ├── pit.toml               # DAG definition
+│   ├── pyproject.toml         # Python deps + package config
 │   ├── uv.lock
 │   ├── src/
-│   │   └── claims/           # shared package for this project
+│   │   └── claims/            # shared package for this project
 │   │       ├── __init__.py
-│   │       ├── sftp.py       # team's SFTP helper
-│   │       ├── formatting.py # shared data cleaning utils
-│   │       └── validation.py # domain-specific validators
+│   │       ├── sftp.py        # team's SFTP helper
+│   │       ├── formatting.py  # shared data cleaning utils
+│   │       └── validation.py  # domain-specific validators
 │   └── tasks/
-│       ├── extract.py        # from claims.sftp import upload
-│       ├── validate.py       # from claims.validation import check_claims
+│       ├── extract.py         # from claims.sftp import upload
+│       ├── validate.py        # from claims.validation import check_claims
 │       └── load.py
-├── dbt_warehouse/
+├── warehouse_transforms/      # SQL-only project — minimal, no Python
 │   ├── pit.toml
-│   ├── pyproject.toml
-│   ├── uv.lock
 │   └── tasks/
-│       └── run_dbt.sh
-└── monthly_reports/
+│       ├── staging_claims.sql
+│       ├── dim_providers.sql
+│       └── fact_claims.sql
+├── nightly_maintenance/       # Shell-only project
+│   ├── pit.toml
+│   └── tasks/
+│       ├── vacuum_db.sh
+│       └── archive_logs.sh
+└── monthly_reports/           # Mixed — Python + shell
     ├── pit.toml
     ├── pyproject.toml
     ├── uv.lock
@@ -50,13 +56,14 @@ projects/
     │       └── templates.py
     └── tasks/
         ├── generate.py
-        └── email.py
+        ├── email.py
+        └── upload.sh
 ```
 
 **Why this structure:**
 
 - Everything about a pipeline lives together — no cross-referencing between directories
-- Dependencies are per-project by default via collocated `pyproject.toml`
+- Python projects get per-project deps via collocated `pyproject.toml`; SQL/shell projects need no Python infrastructure at all
 - Shared code is a proper Python package — LSP, autocomplete, type checking all work naturally
 - Git-friendly: PRs are self-contained, ownership is clear
 - Local dev works naturally: `cd projects/my_pipeline && pit run extract`
@@ -64,7 +71,7 @@ projects/
 
 **Task isolation:**
 
-Tasks cannot import from each other. Shared logic goes in the project's package, task-specific logic stays in the task file. The dependency direction is always one way:
+Tasks cannot import from each other. For Python projects, shared logic goes in the project's package, task-specific logic stays in the task file. The dependency direction is always one way:
 
 ```
 tasks/extract.py      → imports from → claims/ (shared package)
@@ -78,7 +85,7 @@ Never:
 tasks/extract.py      → imports from → tasks/validate.py
 ```
 
-Each task file is self-contained and readable top to bottom. The shared package provides utilities — connection helpers, data cleaning functions, domain validators — not orchestration logic.
+Each task file is self-contained and readable top to bottom. For Python projects, the shared package provides utilities — connection helpers, data cleaning functions, domain validators — not orchestration logic. For SQL projects, each `.sql` file is a standalone query.
 
 **Package configuration in `pyproject.toml`:**
 
@@ -98,7 +105,7 @@ build-backend = "hatchling.build"
 
 `uv sync` installs the package as editable in the project venv. Imports work everywhere — in tasks, in tests, in the REPL.
 
-**Scaffolding:** `pit init my_pipeline` generates the full structure including `src/`, `__init__.py`, `pyproject.toml` with build system config, and a sample task. Nobody needs to remember the boilerplate.
+**Scaffolding:** `pit init my_pipeline` generates a Python project by default (full structure including `src/`, `__init__.py`, `pyproject.toml`, and a sample task). Use `pit init --type sql my_transforms` for a minimal SQL project (just `pit.toml` and `tasks/`), or `pit init --type shell my_jobs` for shell scripts. Nobody needs to remember the boilerplate.
 
 ---
 
@@ -150,6 +157,8 @@ Both modes use the same binary, same SDK socket, same execution path. Local runs
 
 Each project contains a `pit.toml` that declares the task graph, cross-project requirements, and external outputs. Paths are relative to the project root.
 
+**Python pipeline example:**
+
 ```toml
 [dag]
 name = "claims_pipeline"
@@ -197,6 +206,70 @@ name = "claim_lines_staging"
 type = "table"
 location = "warehouse.staging.claim_lines"
 ```
+
+**SQL-only pipeline example (poor man's dbt):**
+
+```toml
+[dag]
+name = "warehouse_transforms"
+schedule = "0 7 * * *"
+overlap = "skip"
+timeout = "30m"
+
+# Connection used by all SQL tasks in this project (resolved via secrets)
+[dag.sql]
+connection = "warehouse_db"
+
+[[tasks]]
+name = "staging_claims"
+script = "tasks/staging_claims.sql"
+timeout = "10m"
+
+[[tasks]]
+name = "dim_providers"
+script = "tasks/dim_providers.sql"
+depends_on = ["staging_claims"]
+timeout = "5m"
+
+[[tasks]]
+name = "fact_claims"
+script = "tasks/fact_claims.sql"
+depends_on = ["staging_claims", "dim_providers"]
+timeout = "10m"
+```
+
+No Python, no UV, no venv. The Go SQL operator reads the `.sql` file and executes it against the configured connection. Dependencies between SQL tasks work exactly like any other task — defined in `depends_on`, executed in topological order.
+
+**Task runner dispatch:**
+
+The runner is determined by convention (file extension), with an optional override:
+
+| Extension | Default runner | What happens |
+|-----------|---------------|--------------|
+| `.py` | `python` | `uv run --project {project_dir} {script}` |
+| `.sh` | `bash` | `bash {script}` |
+| `.sql` | `sql` | Go SQL operator executes against configured connection |
+
+Override with the `runner` field on any task:
+
+```toml
+[[tasks]]
+name = "transform"
+script = "tasks/transform.js"
+runner = "$ node"              # custom: runs `node tasks/transform.js`
+
+[[tasks]]
+name = "analysis"
+script = "tasks/analysis.R"
+runner = "$ Rscript"           # custom: runs `Rscript tasks/analysis.R`
+
+[[tasks]]
+name = "forced_python"
+script = "tasks/run.sh"
+runner = "python"              # override: treat .sh file as python
+```
+
+Predefined runners (`python`, `bash`, `sql`) use their built-in execution strategy. The `$` prefix is an escape hatch — the value after `$` is used as a shell command prefix before the script path. This means pit can run anything without needing built-in support for every language.
 
 **Loading and validation:**
 
@@ -256,17 +329,17 @@ runs/
 - **Isolation:** If a task writes temp files, they don't pollute the source project directory.
 - **Cleanup:** Delete the run directory when retention expires. Everything associated with a run is in one place.
 
-The snapshot is cheap — it's just Python scripts, shared code, and TOML files, not large data. The venv is not copied; `uv run --project` still points at the shared, pre-materialised venv.
+The snapshot is cheap — it's just scripts (Python, SQL, shell), shared code, and TOML files, not large data. For Python projects, the venv is not copied; `uv run --project` still points at the shared, pre-materialised venv.
 
 ---
 
 ### 6. Task Runner
 
-**Runtime:** Go (manages subprocess lifecycle)
+**Runtime:** Go (manages subprocess lifecycle + built-in SQL operator)
 
-Each task runs as an isolated subprocess from the run snapshot directory. The orchestrator manages the full lifecycle.
+Each task runs based on its runner type — either as an isolated subprocess or via the built-in Go SQL operator. The orchestrator manages the full lifecycle.
 
-**Process contract:**
+**Process contract (for subprocess-based runners):**
 
 | Channel | Purpose |
 |---------|---------|
@@ -277,7 +350,7 @@ Each task runs as an isolated subprocess from the run snapshot directory. The or
 | stdout / stderr | Written to log file in run directory |
 | Exit code | 0 = success, non-zero = failure |
 
-**Python tasks:**
+**Python tasks (`.py`):**
 
 ```bash
 uv run --project /projects/{project}/ /runs/{run_id}/project/tasks/{script}.py
@@ -285,15 +358,47 @@ uv run --project /projects/{project}/ /runs/{run_id}/project/tasks/{script}.py
 
 UV resolves the pre-materialised venv. The script runs from the snapshot directory. Near-zero startup overhead.
 
-**Non-Python tasks:**
+**Shell tasks (`.sh`):**
 
-Any executable that honours the exit code contract. Shell scripts, Go binaries, Rust binaries — the runner doesn't care.
+```bash
+bash /runs/{run_id}/project/tasks/{script}.sh
+```
+
+Standard subprocess with the same environment variables. Exit code determines success/failure.
+
+**SQL tasks (`.sql`) — Go SQL operator:**
+
+SQL tasks run in-process via Go's `database/sql`, not as a subprocess. The runner:
+
+1. Reads the `.sql` file from the snapshot directory
+2. Resolves the database connection from the project's `[dag.sql]` config + secrets
+3. Executes the SQL against the connection
+4. Logs rows affected and execution time
+5. Returns success/failure based on query result
+
+This is pit's "poor man's dbt" — SQL files with task dependencies defined in TOML, executed by Go with no Python dependency. Ideal for warehouse transformations, staging loads, and data quality checks.
+
+```sql
+-- tasks/staging_claims.sql
+INSERT INTO staging.claims
+SELECT * FROM raw.claims
+WHERE load_date = CAST(GETDATE() AS DATE);
+```
+
+**Custom runner tasks (`$ prefix`):**
+
+```bash
+{command} /runs/{run_id}/project/tasks/{script}
+```
+
+The command after `$` is used as the prefix. Same subprocess contract as shell tasks.
 
 **Process management:**
 
-- Each task runs in its own OS process (full isolation)
-- Context cancellation via SIGTERM, then SIGKILL after grace period
-- Stdout/stderr written to `runs/{run_id}/logs/{task_name}.log` in real-time
+- Subprocess tasks run in their own OS process (full isolation)
+- SQL tasks run in-process but with their own database connection and timeout
+- Context cancellation via SIGTERM (subprocess) or query cancellation (SQL), then SIGKILL after grace period
+- All output written to `runs/{run_id}/logs/{task_name}.log` in real-time
 
 ---
 
@@ -336,11 +441,11 @@ sdk.mssql_bulk_insert("warehouse", "staging.claims", data)
 
 ---
 
-### 8. Environment Management
+### 8. Environment Management (Python Projects)
 
 **Runtime:** UV
 
-Each project has its own `pyproject.toml` with pinned dependencies. UV manages isolated venvs per project.
+Python projects have their own `pyproject.toml` with pinned dependencies. UV manages isolated venvs per project. SQL-only and shell-only projects skip this entirely — they have no Python dependencies to manage.
 
 **Lifecycle:**
 
@@ -401,7 +506,7 @@ warehouse_db = "Server=...;User Id=...;Password=..."
 
 ### 10. Go Connectors
 
-High-performance I/O operations embedded in the Go binary, exposed to tasks via the SDK. These are the recommended path where Go has clear advantages — but tasks are free to use Python libraries directly for any I/O.
+High-performance I/O operations embedded in the Go binary, exposed to tasks via the SDK and used directly by the Go SQL operator. These are the recommended path where Go has clear advantages — but tasks are free to use any library directly for I/O.
 
 | Connector | Use case | Why Go |
 |-----------|----------|--------|
@@ -410,6 +515,8 @@ High-performance I/O operations embedded in the Go binary, exposed to tasks via 
 | SMTP | Email notifications and alerts | Already built |
 | HTTP | API calls with retry/backoff | Go stdlib |
 | Minio/S3 | File storage for large artifacts | Native Go SDK |
+
+**Dual use:** Go connectors serve two purposes — they're available to Python tasks via the SDK socket, and they're used directly by the Go SQL operator for `.sql` task execution. Same connection infrastructure, same secrets resolution.
 
 **Adding Go connectors:** Write a handler function, register it on the socket router, add a corresponding Python SDK function.
 
@@ -619,15 +726,15 @@ GET  /api/health                      — health check
 ```
 pit:latest
 ├── pit binary (~15MB)
-├── uv + python
-├── projects/          (git clone, periodically pulled)
-├── runs/              (run snapshots + logs, persistent volume)
-├── data/              (DuckLake parquet, persistent volume)
-├── metadata.db        (Pit state, persistent volume)
-└── catalog.db         (DuckLake catalog, persistent volume)
+├── uv + python         (only needed if projects use Python tasks)
+├── projects/           (git clone, periodically pulled)
+├── runs/               (run snapshots + logs, persistent volume)
+├── data/               (DuckLake parquet, persistent volume)
+├── metadata.db         (Pit state, persistent volume)
+└── catalog.db          (DuckLake catalog, persistent volume)
 
 /etc/pit/
-└── secrets.toml       (outside repo, not in git)
+└── secrets.toml        (outside repo, not in git)
 ```
 
 **Resources:** ~50-100MB RAM idle, spikes during task execution. Compared to Airflow's 2GB+ baseline.

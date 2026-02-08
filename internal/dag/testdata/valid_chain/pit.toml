@@ -1,0 +1,17 @@
+[dag]
+name = "valid_chain"
+overlap = "skip"
+
+[[tasks]]
+name = "a"
+script = "tasks/a.sh"
+
+[[tasks]]
+name = "b"
+script = "tasks/b.sh"
+depends_on = ["a"]
+
+[[tasks]]
+name = "c"
+script = "tasks/c.sh"
+depends_on = ["b"]

@@ -1,0 +1,5 @@
+[dag]
+
+[[tasks]]
+name = "a"
+script = "tasks/a.sh"

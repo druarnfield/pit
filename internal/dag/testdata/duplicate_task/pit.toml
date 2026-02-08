@@ -1,0 +1,10 @@
+[dag]
+name = "duplicate_task"
+
+[[tasks]]
+name = "a"
+script = "tasks/a.sh"
+
+[[tasks]]
+name = "a"
+script = "tasks/a.sh"

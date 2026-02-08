@@ -1,0 +1,17 @@
+[dag]
+name = "cycle"
+
+[[tasks]]
+name = "a"
+script = "tasks/a.sh"
+depends_on = ["c"]
+
+[[tasks]]
+name = "b"
+script = "tasks/b.sh"
+depends_on = ["a"]
+
+[[tasks]]
+name = "c"
+script = "tasks/c.sh"
+depends_on = ["b"]

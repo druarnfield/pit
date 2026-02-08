@@ -179,7 +179,7 @@ requires-python = ">=3.11"
 
 [build-system]
 requires = ["hatchling"]
-build-backend = "hatchling.backends"
+build-backend = "hatchling.build"
 `, name)
 }
 

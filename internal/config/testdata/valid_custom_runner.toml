@@ -1,0 +1,7 @@
+[dag]
+name = "custom_runner"
+
+[[tasks]]
+name = "process"
+script = "tasks/run.js"
+runner = "$ node"

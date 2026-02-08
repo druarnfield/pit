@@ -1,0 +1,34 @@
+[dag]
+name = "full_example"
+schedule = "0 6 * * *"
+overlap = "skip"
+timeout = "1h"
+requires = ["other_dag"]
+
+[dag.sql]
+connection = "my_database"
+
+[[tasks]]
+name = "extract"
+script = "tasks/extract.py"
+runner = "python"
+timeout = "5m"
+retries = 2
+retry_delay = "30s"
+
+[[tasks]]
+name = "transform"
+script = "tasks/transform.sh"
+depends_on = ["extract"]
+timeout = "10m"
+
+[[tasks]]
+name = "load"
+script = "tasks/load.sql"
+depends_on = ["transform"]
+runner = "sql"
+
+[[outputs]]
+name = "results"
+type = "table"
+location = "warehouse.results"

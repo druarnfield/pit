@@ -1,0 +1,6 @@
+[dag]
+name = "minimal"
+
+[[tasks]]
+name = "hello"
+script = "tasks/hello.sh"

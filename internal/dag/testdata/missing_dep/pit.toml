@@ -1,0 +1,7 @@
+[dag]
+name = "missing_dep"
+
+[[tasks]]
+name = "a"
+script = "tasks/a.sh"
+depends_on = ["nonexistent"]

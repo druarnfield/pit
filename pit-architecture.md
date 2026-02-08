@@ -120,10 +120,12 @@ Pit is a single Go binary with two modes.
 ```bash
 pit run claims_pipeline              # run entire DAG locally
 pit run claims_pipeline/extract      # run a single task
+pit run warehouse_transforms         # run SQL DAG (uses [dag.sql] connection)
 pit validate                         # validate all pit.toml files
 pit sync                             # sync all UV environments
 pit status                           # show DAG/task states
-pit init my_pipeline                 # scaffold a new project
+pit init my_pipeline                 # scaffold a new project (Python)
+pit init --type sql my_transforms    # scaffold a SQL project
 pit outputs                          # list all registered outputs
 pit outputs --type table             # filter by type
 pit outputs --location warehouse.*   # search by location
@@ -135,6 +137,8 @@ pit logs claims_pipeline/extract     # tail task logs
 ```bash
 pit serve                            # start scheduler, API, git sync
 ```
+
+Global flags: `--project-dir` (root directory), `--secrets` (path to secrets file, default `/etc/pit/secrets.toml`), `--verbose`.
 
 Both modes use the same binary, same SDK socket, same execution path. Local runs behave identically to production runs — no conditional logic, no fallback paths, no "works on my machine" surprises.
 
@@ -276,7 +280,7 @@ Predefined runners (`python`, `bash`, `sql`) use their built-in execution strate
 - On startup, scan `projects/*/pit.toml`
 - Parse and validate: check for cycles, missing dependencies, unknown scripts
 - Build in-memory adjacency graph per DAG (topological sort)
-- Watch for file changes (fsnotify) and hot-reload with validation before swap
+- Reload configs on SIGHUP or via API (`POST /api/reload`), validate before swap
 - Reject invalid configs with clear errors, keep running with last-known-good
 
 **Cross-project requirements:**
@@ -372,11 +376,11 @@ SQL tasks run in-process via Go's `database/sql`, not as a subprocess. The runne
 
 1. Reads the `.sql` file from the snapshot directory
 2. Resolves the database connection from the project's `[dag.sql]` config + secrets
-3. Executes the SQL against the connection
+3. Sends the entire file contents to the database as a single execution — no statement splitting, no parsing by pit
 4. Logs rows affected and execution time
 5. Returns success/failure based on query result
 
-This is pit's "poor man's dbt" — SQL files with task dependencies defined in TOML, executed by Go with no Python dependency. Ideal for warehouse transformations, staging loads, and data quality checks.
+The SQL file is sent as-is. Multi-statement scripts, temp tables, transactions, CTEs — whatever the database supports. Pit doesn't parse SQL, it just delivers it. This is pit's "poor man's dbt" — SQL files with task dependencies defined in TOML, executed by Go with no Python dependency. Ideal for warehouse transformations, staging loads, and data quality checks.
 
 ```sql
 -- tasks/staging_claims.sql
@@ -500,7 +504,22 @@ warehouse_db = "Server=...;User Id=...;Password=..."
 - Secrets never touch disk in the task process or appear in crash dumps
 - Audit log: which task accessed which secret, when
 
-**Later:** Encrypt the file at rest, add key rotation, integrate with external vault. Same SDK interface, no task code changes.
+**Local development:** Developers need a local secrets file for running tasks that require database connections or other secrets. The path defaults to `/etc/pit/secrets.toml` but can be overridden:
+
+```bash
+pit run --secrets ~/.pit/secrets.toml warehouse_transforms
+```
+
+Same format, same resolution rules. Developers maintain their own file with dev/staging credentials.
+
+**Known limitations (v1):**
+
+- **Plaintext storage.** The secrets file is not encrypted at rest. Security relies on filesystem permissions and keeping the file outside the git repo. Acceptable for a single-server deployment where the operator controls access.
+- **Trust boundary is the repo.** Any task in the repo can request any secret via the SDK socket. There is no per-project secret scoping enforcement — a task in `claims_pipeline` could request `warehouse_db` if it wanted to. The scoped resolution (project-first, then global) is a convenience for naming, not an access control boundary.
+- **`PIT_SOCKET` is visible to all tasks.** The Unix socket path is passed via environment variable. Any process running as the same user could connect to it. This is fine when all code in the repo is trusted, but there's no authentication on the socket itself.
+- **No rotation or expiry.** Changing a secret requires editing the file and restarting the process (or triggering a reload). No automatic rotation, no expiry warnings.
+
+**Later:** Encrypt the file at rest, add key rotation, per-project ACLs on secret access, integrate with external vault. Same SDK interface, no task code changes.
 
 ---
 
@@ -572,39 +591,19 @@ df = conn.execute("SELECT * FROM lake.pipeline.raw_claims").fetchdf()
 
 ### 12. Logging
 
-**Logs are files first, archived to DuckLake later.**
-
-**During execution:**
+**Logs are files. That's it.**
 
 - Task runner writes stdout/stderr to `runs/{run_id}/logs/{task_name}.log` in real-time
-- CLI and API read directly from log files for live tailing
+- CLI reads directly from log files: `pit logs claims_pipeline/extract` tails the file
+- API serves log content by reading the file
 - No SQLite writes during task execution — zero contention on the metadata DB
 
-**After execution:**
+**Retention:**
 
-- Background job periodically loads completed log files into DuckLake
-- Logs become Parquet files — compressed, queryable, subject to retention policy
-- Original log files cleaned up after successful archival
+- Run directories (including logs) are cleaned up based on age — configurable retention period
+- Deleting a run directory removes everything: snapshot, logs, all in one place
 
-**Historical queries:**
-
-- "Show me all errors from last week" — SQL query on DuckLake log table
-- "What did this task output 3 days ago?" — time travel to that snapshot
-- Retention handled by the same DuckLake cleanup that manages inter-task data
-
-**Log structure in DuckLake:**
-
-| Column | Type |
-|--------|------|
-| run_id | VARCHAR |
-| dag_name | VARCHAR |
-| task_name | VARCHAR |
-| attempt | INTEGER |
-| timestamp | TIMESTAMP |
-| stream | VARCHAR (stdout/stderr) |
-| content | VARCHAR |
-
-This keeps SQLite focused purely on orchestration state — lightweight, fast, no bloat from log data accumulating over time.
+**Later:** Archive completed logs to DuckLake for historical queries ("show me all errors from last week"). Same `pit logs` interface, backed by Parquet instead of files. Not needed until someone asks for it.
 
 ---
 
@@ -715,7 +714,7 @@ GET  /api/health                      — health check
 **Git-based. No artifact registry, no deploy pipeline, no DAG sync daemon.**
 
 1. Developers work locally in `projects/`, run tasks with `pit run`
-2. PR reviewed — diff is Python files and TOML config
+2. PR reviewed — diff is task scripts and TOML config
 3. Merge to main
 4. Server pulls main on a schedule (or webhook trigger)
 5. `pit sync` any changed lockfiles, hot-reload changed `pit.toml` files

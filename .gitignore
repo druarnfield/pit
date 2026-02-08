@@ -13,5 +13,8 @@
 .DS_Store
 Thumbs.db
 
+# Run snapshots
+/runs/
+
 # Test artifacts
 /projects/test_*/

@@ -8,12 +8,22 @@ import (
 	"strings"
 )
 
+// SecretsResolver resolves secrets by project scope. nil if no secrets configured.
+type SecretsResolver interface {
+	Resolve(project, key string) (string, error)
+}
+
 // RunContext holds the information a runner needs to execute a task.
 type RunContext struct {
 	ScriptPath     string   // absolute path to script in snapshot
 	SnapshotDir    string   // runs/{run_id}/project/
 	OrigProjectDir string   // original projects/{name}/ (for uv --project)
 	Env            []string // full process environment (os.Environ() + PIT_* vars)
+
+	// SQL-specific fields — zero-value when unused.
+	SecretsResolver SecretsResolver // resolves secrets by project scope
+	DAGName         string          // for scoped secret resolution
+	SQLConnection   string          // connection name from [dag.sql].connection
 }
 
 // ValidateScript checks that ScriptPath is contained within SnapshotDir,

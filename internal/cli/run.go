@@ -56,8 +56,9 @@ func newRunCmd() *cobra.Command {
 			defer stop()
 
 			opts := engine.ExecuteOpts{
-				TaskName: taskName,
-				Verbose:  verbose,
+				TaskName:    taskName,
+				Verbose:     verbose,
+				SecretsPath: secretsPath,
 			}
 
 			run, err := engine.Execute(ctx, cfg, opts)

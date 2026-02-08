@@ -11,6 +11,8 @@ import (
 
 	"github.com/druarnfield/pit/internal/config"
 	"github.com/druarnfield/pit/internal/runner"
+	"github.com/druarnfield/pit/internal/sdk"
+	"github.com/druarnfield/pit/internal/secrets"
 )
 
 // ExecuteOpts configures a DAG execution.
@@ -19,6 +21,7 @@ type ExecuteOpts struct {
 	TaskName    string // if set, only run this single task
 	Verbose     bool   // stream task output to stdout
 	Concurrency int    // max parallel tasks (0 = unlimited)
+	SecretsPath string // path to secrets.toml (optional, empty = no secrets)
 }
 
 // Execute runs a DAG to completion.
@@ -35,14 +38,42 @@ func Execute(ctx context.Context, cfg *config.ProjectConfig, opts ExecuteOpts) (
 		return nil, fmt.Errorf("snapshot: %w", err)
 	}
 
+	// Load secrets and start SDK server if configured
+	var store *secrets.Store
+	if opts.SecretsPath != "" {
+		var err error
+		store, err = secrets.Load(opts.SecretsPath)
+		if err != nil {
+			return nil, fmt.Errorf("loading secrets: %w", err)
+		}
+	}
+
+	var sdkServer *sdk.Server
+	var socketPath string
+	if store != nil {
+		socketPath = filepath.Join(os.TempDir(), fmt.Sprintf("pit-%d.sock", os.Getpid()))
+		sdkServer, err = sdk.NewServer(socketPath, store, cfg.DAG.Name)
+		if err != nil {
+			return nil, fmt.Errorf("starting SDK server: %w", err)
+		}
+		sdkCtx, sdkCancel := context.WithCancel(context.Background())
+		go sdkServer.Serve(sdkCtx)
+		defer func() {
+			sdkCancel()
+			sdkServer.Shutdown()
+		}()
+	}
+
 	// Build Run from config
 	run := &Run{
-		ID:          runID,
-		DAGName:     cfg.DAG.Name,
-		SnapshotDir: snapshotDir,
-		LogDir:      logDir,
-		Status:      StatusRunning,
-		StartedAt:   time.Now(),
+		ID:              runID,
+		DAGName:         cfg.DAG.Name,
+		SnapshotDir:     snapshotDir,
+		LogDir:          logDir,
+		Status:          StatusRunning,
+		StartedAt:       time.Now(),
+		SocketPath:      socketPath,
+		SecretsResolver: store,
 	}
 
 	for _, tc := range cfg.Tasks {
@@ -289,12 +320,18 @@ func executeTask(ctx context.Context, ti *TaskInstance, run *Run, cfg *config.Pr
 		"PIT_TASK_NAME="+ti.Name,
 		"PIT_DAG_NAME="+run.DAGName,
 	)
+	if run.SocketPath != "" {
+		env = append(env, "PIT_SOCKET="+run.SocketPath)
+	}
 
 	rc := runner.RunContext{
-		ScriptPath:     scriptPath,
-		SnapshotDir:    run.SnapshotDir,
-		OrigProjectDir: cfg.Dir(),
-		Env:            env,
+		ScriptPath:      scriptPath,
+		SnapshotDir:     run.SnapshotDir,
+		OrigProjectDir:  cfg.Dir(),
+		Env:             env,
+		SecretsResolver: run.SecretsResolver,
+		DAGName:         run.DAGName,
+		SQLConnection:   cfg.DAG.SQL.Connection,
 	}
 
 	// Validate script path is within snapshot

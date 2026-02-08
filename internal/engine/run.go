@@ -18,6 +18,11 @@ const (
 	StatusUpstreamFailed TaskStatus = "upstream_failed"
 )
 
+// SecretsResolver resolves secrets by project scope.
+type SecretsResolver interface {
+	Resolve(project, key string) (string, error)
+}
+
 // Run holds the state of a single DAG execution.
 type Run struct {
 	ID          string
@@ -28,6 +33,10 @@ type Run struct {
 	StartedAt   time.Time
 	EndedAt     time.Time
 	Tasks       []*TaskInstance
+
+	// SDK fields — zero-value when SDK is not configured.
+	SocketPath      string           // Unix socket for task-to-orchestrator communication
+	SecretsResolver SecretsResolver  // resolves secrets by project scope
 
 	// mu protects TaskInstance Status and Error fields during concurrent execution.
 	mu sync.Mutex

@@ -176,6 +176,10 @@ func pyprojectToml(name string) string {
 name = "%s"
 version = "0.1.0"
 requires-python = ">=3.11"
+dependencies = ["pit-sdk"]
+
+[tool.uv.sources]
+pit-sdk = { path = "../../sdk/python" }
 
 [build-system]
 requires = ["hatchling"]
@@ -186,8 +190,12 @@ build-backend = "hatchling.build"
 func helloPy(name string) string {
 	return fmt.Sprintf(`"""Sample task for %s."""
 
+from pit.sdk import get_secret
+
 
 def main():
+    # Example: retrieve a secret from the Pit secrets store
+    # conn_str = get_secret("my_database")
     print("Hello from %s!")
 
 

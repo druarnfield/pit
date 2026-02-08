@@ -1,5 +1,9 @@
 deferring planned tasks without permission is NOT allowed.  Even if you have a good reason for deferring the task, you must always ask for permission before deferring a task!
 
+## README
+
+Keep `README.md` up to date with the current project state. When implementing new commands, features, or changing existing behaviour, update the relevant sections of the README (CLI commands table, usage examples, roadmap). Move items from the roadmap to the "Implemented" section as they are completed.
+
 ## Testing Conventions
 
 ### Commands

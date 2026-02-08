@@ -7,8 +7,9 @@ import (
 )
 
 var (
-	projectDir string
-	verbose    bool
+	projectDir  string
+	verbose     bool
+	secretsPath string
 )
 
 func newRootCmd() *cobra.Command {
@@ -20,6 +21,7 @@ func newRootCmd() *cobra.Command {
 
 	root.PersistentFlags().StringVar(&projectDir, "project-dir", ".", "root project directory")
 	root.PersistentFlags().BoolVar(&verbose, "verbose", false, "enable verbose output")
+	root.PersistentFlags().StringVar(&secretsPath, "secrets", "", "path to secrets file")
 
 	root.AddCommand(
 		newValidateCmd(),

@@ -164,6 +164,42 @@ func typeNameFmt(v interface{}) string {
 	}
 }
 
+func TestDetectDriver(t *testing.T) {
+	tests := []struct {
+		name       string
+		connStr    string
+		wantDriver string
+		wantErr    bool
+	}{
+		{name: "sqlserver uri", connStr: "sqlserver://user:pass@host:1433?database=db", wantDriver: "mssql"},
+		{name: "mssql uri", connStr: "mssql://user:pass@host/db", wantDriver: "mssql"},
+		{name: "sqlserver uppercase", connStr: "SQLSERVER://HOST/DB", wantDriver: "mssql"},
+		{name: "duckdb uri", connStr: "duckdb:///path/to/db", wantDriver: "duckdb"},
+		{name: "db file path", connStr: "/data/warehouse.db", wantDriver: "duckdb"},
+		{name: "duckdb file path", connStr: "/data/warehouse.duckdb", wantDriver: "duckdb"},
+		{name: "unknown scheme", connStr: "postgres://host/db", wantErr: true},
+		{name: "plain string", connStr: "just-a-string", wantErr: true},
+	}
+
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			driver, err := DetectDriver(tt.connStr)
+			if tt.wantErr {
+				if err == nil {
+					t.Errorf("DetectDriver(%q) expected error, got nil", tt.connStr)
+				}
+				return
+			}
+			if err != nil {
+				t.Fatalf("DetectDriver(%q) unexpected error: %v", tt.connStr, err)
+			}
+			if driver != tt.wantDriver {
+				t.Errorf("DetectDriver(%q) = %q, want %q", tt.connStr, driver, tt.wantDriver)
+			}
+		})
+	}
+}
+
 func containsStr(s, substr string) bool {
 	return len(s) >= len(substr) && searchStr(s, substr)
 }

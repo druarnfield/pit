@@ -209,7 +209,7 @@ Resolution order: project-scoped section first, then `[global]`.
 
 ## SDK Socket
 
-When `--secrets` is provided, Pit starts a JSON-over-Unix-socket server. Tasks can connect via the `PIT_SOCKET` environment variable to request secrets at runtime.
+When `--secrets` is provided, Pit starts a JSON-over-socket server (Unix domain socket on Linux/macOS, TCP localhost on Windows). Tasks can connect via the `PIT_SOCKET` environment variable to request secrets at runtime.
 
 Python tasks use the bundled SDK client:
 

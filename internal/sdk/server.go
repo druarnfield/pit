@@ -6,6 +6,7 @@ import (
 	"fmt"
 	"net"
 	"os"
+	"runtime"
 	"sync"
 )
 
@@ -29,28 +30,30 @@ type SecretsResolver interface {
 	Resolve(project, key string) (string, error)
 }
 
-// Server is a JSON-over-Unix-socket server for task-to-orchestrator communication.
+// Server is a JSON-over-socket server for task-to-orchestrator communication.
+// On Unix it uses a Unix domain socket; on Windows it uses TCP on localhost.
 type Server struct {
 	listener   net.Listener
-	socketPath string
+	socketPath string // non-empty only for Unix sockets (for cleanup)
+	addr       string // connection address: socket path (Unix) or host:port (Windows)
 	dagName    string
 	handlers   map[string]HandlerFunc
 	wg         sync.WaitGroup
 }
 
-// NewServer creates a Unix socket and registers the default handlers.
+// NewServer creates a socket listener and registers the default handlers.
+// On Unix, it listens on a Unix domain socket at socketPath.
+// On Windows, it listens on TCP 127.0.0.1 with an OS-assigned port (socketPath is ignored).
 func NewServer(socketPath string, store SecretsResolver, dagName string) (*Server, error) {
-	// Remove stale socket file if it exists
-	os.Remove(socketPath)
-
-	ln, err := net.Listen("unix", socketPath)
+	ln, addr, err := listen(socketPath)
 	if err != nil {
-		return nil, fmt.Errorf("creating SDK socket %q: %w", socketPath, err)
+		return nil, err
 	}
 
 	s := &Server{
 		listener:   ln,
 		socketPath: socketPath,
+		addr:       addr,
 		dagName:    dagName,
 		handlers:   make(map[string]HandlerFunc),
 	}
@@ -66,6 +69,32 @@ func NewServer(socketPath string, store SecretsResolver, dagName string) (*Serve
 	}
 
 	return s, nil
+}
+
+// listen creates a platform-appropriate network listener.
+// On Windows, it returns a TCP listener on 127.0.0.1 with an OS-assigned port.
+// On other platforms, it returns a Unix domain socket listener at socketPath.
+func listen(socketPath string) (net.Listener, string, error) {
+	if runtime.GOOS == "windows" {
+		ln, err := net.Listen("tcp", "127.0.0.1:0")
+		if err != nil {
+			return nil, "", fmt.Errorf("creating SDK TCP listener: %w", err)
+		}
+		return ln, ln.Addr().String(), nil
+	}
+
+	os.Remove(socketPath)
+	ln, err := net.Listen("unix", socketPath)
+	if err != nil {
+		return nil, "", fmt.Errorf("creating SDK socket %q: %w", socketPath, err)
+	}
+	return ln, socketPath, nil
+}
+
+// Addr returns the address clients should use to connect to this server.
+// On Unix this is the socket file path; on Windows it is a host:port string.
+func (s *Server) Addr() string {
+	return s.addr
 }
 
 // Serve accepts connections until the context is cancelled.
@@ -99,7 +128,9 @@ func (s *Server) Serve(ctx context.Context) error {
 func (s *Server) Shutdown() error {
 	err := s.listener.Close()
 	s.wg.Wait()
-	os.Remove(s.socketPath)
+	if s.socketPath != "" && runtime.GOOS != "windows" {
+		os.Remove(s.socketPath)
+	}
 	return err
 }
 

@@ -6,6 +6,7 @@ import (
 	"fmt"
 	"net"
 	"path/filepath"
+	"runtime"
 	"strings"
 	"testing"
 	"time"
@@ -30,6 +31,14 @@ func (m *mockStore) Resolve(project, key string) (string, error) {
 	return "", fmt.Errorf("secret %q not found for project %q", key, project)
 }
 
+// testNetwork returns the network type used by the SDK server on the current platform.
+func testNetwork() string {
+	if runtime.GOOS == "windows" {
+		return "tcp"
+	}
+	return "unix"
+}
+
 func startTestServer(t *testing.T, store SecretsResolver, dagName string) (string, context.CancelFunc) {
 	t.Helper()
 	sockPath := filepath.Join(t.TempDir(), "test.sock")
@@ -44,9 +53,12 @@ func startTestServer(t *testing.T, store SecretsResolver, dagName string) (strin
 		errCh <- srv.Serve(ctx)
 	}()
 
+	addr := srv.Addr()
+	network := testNetwork()
+
 	// Wait briefly for socket to be ready
 	for i := 0; i < 50; i++ {
-		conn, err := net.Dial("unix", sockPath)
+		conn, err := net.Dial(network, addr)
 		if err == nil {
 			conn.Close()
 			break
@@ -59,12 +71,12 @@ func startTestServer(t *testing.T, store SecretsResolver, dagName string) (strin
 		srv.Shutdown()
 	})
 
-	return sockPath, cancel
+	return addr, cancel
 }
 
-func sendRequest(t *testing.T, sockPath string, req Request) Response {
+func sendRequest(t *testing.T, addr string, req Request) Response {
 	t.Helper()
-	conn, err := net.Dial("unix", sockPath)
+	conn, err := net.Dial(testNetwork(), addr)
 	if err != nil {
 		t.Fatalf("connecting to socket: %v", err)
 	}
@@ -152,7 +164,7 @@ func TestMalformedJSON(t *testing.T) {
 	store := &mockStore{data: map[string]map[string]string{}}
 	sockPath, _ := startTestServer(t, store, "my_dag")
 
-	conn, err := net.Dial("unix", sockPath)
+	conn, err := net.Dial(testNetwork(), sockPath)
 	if err != nil {
 		t.Fatalf("connecting to socket: %v", err)
 	}
@@ -193,8 +205,35 @@ func TestContextCancellation(t *testing.T) {
 	time.Sleep(50 * time.Millisecond)
 
 	// Connection should now fail
-	_, err := net.Dial("unix", sockPath)
+	_, err := net.Dial(testNetwork(), sockPath)
 	if err == nil {
 		t.Error("expected connection to fail after shutdown")
+	}
+}
+
+func TestAddr(t *testing.T) {
+	sockPath := filepath.Join(t.TempDir(), "test.sock")
+	store := &mockStore{data: map[string]map[string]string{}}
+	srv, err := NewServer(sockPath, store, "test")
+	if err != nil {
+		t.Fatalf("NewServer() unexpected error: %v", err)
+	}
+	defer srv.Shutdown()
+
+	addr := srv.Addr()
+	if addr == "" {
+		t.Fatal("Addr() returned empty string")
+	}
+
+	if runtime.GOOS == "windows" {
+		// On Windows, addr should be a TCP address like 127.0.0.1:PORT
+		if !strings.HasPrefix(addr, "127.0.0.1:") {
+			t.Errorf("Addr() = %q, want it to start with '127.0.0.1:'", addr)
+		}
+	} else {
+		// On Unix, addr should be the socket path
+		if addr != sockPath {
+			t.Errorf("Addr() = %q, want %q", addr, sockPath)
+		}
 	}
 }

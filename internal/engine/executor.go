@@ -51,11 +51,12 @@ func Execute(ctx context.Context, cfg *config.ProjectConfig, opts ExecuteOpts) (
 	var sdkServer *sdk.Server
 	var socketPath string
 	if store != nil {
-		socketPath = filepath.Join(os.TempDir(), fmt.Sprintf("pit-%d.sock", os.Getpid()))
-		sdkServer, err = sdk.NewServer(socketPath, store, cfg.DAG.Name)
+		socketHint := filepath.Join(os.TempDir(), fmt.Sprintf("pit-%d.sock", os.Getpid()))
+		sdkServer, err = sdk.NewServer(socketHint, store, cfg.DAG.Name)
 		if err != nil {
 			return nil, fmt.Errorf("starting SDK server: %w", err)
 		}
+		socketPath = sdkServer.Addr() // actual address: socket path (Unix) or host:port (Windows)
 		sdkCtx, sdkCancel := context.WithCancel(context.Background())
 		go sdkServer.Serve(sdkCtx)
 		defer func() {

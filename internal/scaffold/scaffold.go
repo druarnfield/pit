@@ -179,7 +179,7 @@ requires-python = ">=3.11"
 dependencies = ["pit-sdk"]
 
 [tool.uv.sources]
-pit-sdk = { path = "../../sdk/python" }
+pit-sdk = { git = "https://github.com/druarnfield/pit", subdirectory = "sdk/python" }
 
 [build-system]
 requires = ["hatchling"]

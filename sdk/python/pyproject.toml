@@ -2,7 +2,7 @@
 name = "pit-sdk"
 version = "0.1.0"
 description = "Python SDK client for the Pit orchestrator"
-requires-python = ">=3.11"
+requires-python = ">=3.10"
 
 [build-system]
 requires = ["hatchling"]

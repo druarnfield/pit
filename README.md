@@ -230,9 +230,38 @@ Create a `pit_config.toml` in the project root to set workspace-level defaults:
 
 ```toml
 secrets_dir = "secrets/secrets.toml"
+runs_dir = "runs"
+dbt_driver = "ODBC Driver 17 for SQL Server"
+keep_artifacts = ["logs", "project", "data"]
 ```
 
-This avoids passing `--secrets` on every command. Relative paths are resolved from the project root. The CLI flag takes precedence if both are set.
+| Field | Default | Description |
+|-------|---------|-------------|
+| `secrets_dir` | (none) | Path to secrets TOML file |
+| `runs_dir` | `"runs"` | Directory for run snapshots |
+| `dbt_driver` | `"ODBC Driver 17 for SQL Server"` | ODBC driver for dbt profiles |
+| `keep_artifacts` | `["logs", "project", "data"]` | Which run subdirs to keep after completion |
+
+All fields are optional. Relative paths are resolved from the project root. CLI flags take precedence if both are set.
+
+### Artifact Retention
+
+By default, Pit keeps all run artifacts (project snapshot, logs, and data). To save disk space, configure `keep_artifacts` to retain only what you need:
+
+```toml
+# Workspace level — applies to all projects
+keep_artifacts = ["logs"]
+```
+
+Per-project overrides are supported in `pit.toml`:
+
+```toml
+[dag]
+name = "my_pipeline"
+keep_artifacts = ["logs", "data"]   # override workspace default
+```
+
+Resolution order: per-project (if set) > workspace (if set) > default (keep all). Valid values: `logs`, `project`, `data`.
 
 ## Development
 

@@ -19,12 +19,14 @@ import (
 
 // ExecuteOpts configures a DAG execution.
 type ExecuteOpts struct {
-	RunsDir     string // directory for run snapshots (default: "runs")
-	TaskName    string // if set, only run this single task
-	Verbose     bool   // stream task output to stdout
-	Concurrency int    // max parallel tasks (0 = unlimited)
-	SecretsPath string // path to secrets.toml (optional, empty = no secrets)
-	DataSeedDir string // if set, copy contents into data dir before execution
+	RunsDir       string   // directory for run snapshots (default: "runs")
+	TaskName      string   // if set, only run this single task
+	Verbose       bool     // stream task output to stdout
+	Concurrency   int      // max parallel tasks (0 = unlimited)
+	SecretsPath   string   // path to secrets.toml (optional, empty = no secrets)
+	DataSeedDir   string   // if set, copy contents into data dir before execution
+	DBTDriver     string   // ODBC driver for dbt profiles (default: config.DefaultDBTDriver)
+	KeepArtifacts []string // which run subdirs to keep after completion (default: all)
 }
 
 // Execute runs a DAG to completion.
@@ -159,6 +161,15 @@ func Execute(ctx context.Context, cfg *config.ProjectConfig, opts ExecuteOpts) (
 	}
 
 	printSummary(os.Stdout, run)
+
+	// Cleanup artifacts based on keep_artifacts config
+	if len(opts.KeepArtifacts) > 0 {
+		runDir := filepath.Dir(run.SnapshotDir) // parent of project/
+		if err := cleanupArtifacts(runDir, opts.KeepArtifacts); err != nil {
+			fmt.Fprintf(os.Stderr, "warning: artifact cleanup failed: %v\n", err)
+		}
+	}
+
 	return run, nil
 }
 
@@ -309,6 +320,7 @@ func executeTask(ctx context.Context, ti *TaskInstance, run *Run, cfg *config.Pr
 			DAGName: run.DAGName,
 			Profile: cfg.DAG.DBT.Profile,
 			Target:  cfg.DAG.DBT.Target,
+			Driver:  opts.DBTDriver,
 		}
 
 		var profilesDir string

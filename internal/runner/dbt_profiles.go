@@ -5,6 +5,8 @@ import (
 	"os"
 	"strconv"
 	"text/template"
+
+	"github.com/druarnfield/pit/internal/config"
 )
 
 var profilesTmpl = template.Must(template.New("profiles").Parse(`{{ .ProfileName }}:
@@ -12,7 +14,7 @@ var profilesTmpl = template.Must(template.New("profiles").Parse(`{{ .ProfileName
   outputs:
     {{ .Target }}:
       type: sqlserver
-      driver: "ODBC Driver 17 for SQL Server"
+      driver: "{{ .Driver }}"
       server: "{{ .Host }}"
       port: {{ .Port }}
       database: "{{ .Database }}"
@@ -26,6 +28,7 @@ var profilesTmpl = template.Must(template.New("profiles").Parse(`{{ .ProfileName
 type profileData struct {
 	ProfileName string
 	Target      string
+	Driver      string
 	Host        string
 	Port        int
 	Database    string
@@ -89,6 +92,10 @@ func GenerateProfiles(cfg *DBTProfilesInput, resolver SecretsResolver) (string, 
 	if target == "" {
 		target = "prod"
 	}
+	driver := cfg.Driver
+	if driver == "" {
+		driver = config.DefaultDBTDriver
+	}
 
 	f, err := os.Create(tmpDir + "/profiles.yml")
 	if err != nil {
@@ -100,6 +107,7 @@ func GenerateProfiles(cfg *DBTProfilesInput, resolver SecretsResolver) (string, 
 	data := profileData{
 		ProfileName: profileName,
 		Target:      target,
+		Driver:      driver,
 		Host:        host,
 		Port:        port,
 		Database:    database,
@@ -120,4 +128,5 @@ type DBTProfilesInput struct {
 	DAGName string
 	Profile string
 	Target  string
+	Driver  string // ODBC driver string; defaults to config.DefaultDBTDriver if empty
 }

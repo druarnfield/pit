@@ -63,6 +63,7 @@ func TestGenerateProfiles(t *testing.T) {
 		{"user", `user: "dbt_user"`},
 		{"password", `password: "secret123"`},
 		{"type", "type: sqlserver"},
+		{"default driver", `driver: "ODBC Driver 17 for SQL Server"`},
 	}
 	for _, c := range checks {
 		if !strings.Contains(content, c.want) {
@@ -161,6 +162,38 @@ func TestGenerateProfiles_InvalidPort(t *testing.T) {
 	}
 	if !strings.Contains(err.Error(), "not a valid integer") {
 		t.Errorf("error = %q, want it to mention invalid integer", err)
+	}
+}
+
+func TestGenerateProfiles_CustomDriver(t *testing.T) {
+	resolver := &mockResolver{secrets: map[string]string{
+		"dbt_host":     "host",
+		"dbt_port":     "1433",
+		"dbt_database": "db",
+		"dbt_schema":   "dbo",
+		"dbt_user":     "user",
+		"dbt_password": "pass",
+	}}
+
+	input := &DBTProfilesInput{
+		DAGName: "test",
+		Driver:  "ODBC Driver 18 for SQL Server",
+	}
+
+	dir, cleanup, err := GenerateProfiles(input, resolver)
+	if err != nil {
+		t.Fatalf("GenerateProfiles() error: %v", err)
+	}
+	defer cleanup()
+
+	data, err := os.ReadFile(dir + "/profiles.yml")
+	if err != nil {
+		t.Fatalf("reading profiles.yml: %v", err)
+	}
+	content := string(data)
+
+	if !strings.Contains(content, `driver: "ODBC Driver 18 for SQL Server"`) {
+		t.Errorf("profiles.yml should use custom driver, got: %s", content)
 	}
 }
 

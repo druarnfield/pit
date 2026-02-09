@@ -23,15 +23,23 @@ type Server struct {
 	store      *secrets.Store
 	triggers   []trigger.Trigger
 	ftpConfigs map[string]*config.FTPWatchConfig
-	eventCh    chan trigger.Event
-	opts       engine.ExecuteOpts
+	eventCh            chan trigger.Event
+	opts               engine.ExecuteOpts
+	workspaceArtifacts []string // workspace-level keep_artifacts (nil = use default)
 
 	mu         sync.Mutex
 	activeRuns map[string]bool
 }
 
+// Options holds workspace-level settings passed from the CLI layer.
+type Options struct {
+	RunsDir            string
+	DBTDriver          string
+	WorkspaceArtifacts []string // workspace-level keep_artifacts (nil = use default)
+}
+
 // NewServer discovers projects, validates them, and registers triggers.
-func NewServer(rootDir, secretsPath string, verbose bool) (*Server, error) {
+func NewServer(rootDir, secretsPath string, verbose bool, srvOpts Options) (*Server, error) {
 	configs, err := config.Discover(rootDir)
 	if err != nil {
 		return nil, fmt.Errorf("discovering projects: %w", err)
@@ -56,10 +64,13 @@ func NewServer(rootDir, secretsPath string, verbose bool) (*Server, error) {
 		ftpConfigs: make(map[string]*config.FTPWatchConfig),
 		eventCh:    make(chan trigger.Event, 64),
 		opts: engine.ExecuteOpts{
+			RunsDir:     srvOpts.RunsDir,
 			Verbose:     verbose,
 			SecretsPath: secretsPath,
+			DBTDriver:   srvOpts.DBTDriver,
 		},
-		activeRuns: make(map[string]bool),
+		workspaceArtifacts: srvOpts.WorkspaceArtifacts,
+		activeRuns:         make(map[string]bool),
 	}
 
 	// Register triggers for each DAG
@@ -185,6 +196,9 @@ func (s *Server) handleEvent(ctx context.Context, ev trigger.Event, wg *sync.Wai
 
 		opts := s.opts
 
+		// Resolve keep_artifacts: per-project > workspace > default
+		opts.KeepArtifacts = resolveArtifacts(cfg.DAG.KeepArtifacts, s.workspaceArtifacts)
+
 		// For FTP events, download files to temp dir
 		var seedDir string
 		if ev.Source == "ftp_watch" && len(ev.Files) > 0 {
@@ -248,6 +262,17 @@ func (s *Server) downloadFTPFiles(ev trigger.Event) (string, error) {
 	}
 
 	return tmpDir, nil
+}
+
+// resolveArtifacts returns the keep_artifacts list: per-project > workspace > default.
+func resolveArtifacts(perProject, workspace []string) []string {
+	if len(perProject) > 0 {
+		return perProject
+	}
+	if workspace != nil {
+		return workspace
+	}
+	return config.DefaultKeepArtifacts
 }
 
 func (s *Server) archiveFTPFiles(ev trigger.Event) error {

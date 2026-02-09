@@ -43,14 +43,15 @@ func (p *ProjectConfig) Dir() string {
 
 // DAGConfig holds the DAG-level settings.
 type DAGConfig struct {
-	Name     string          `toml:"name"`
-	Schedule string          `toml:"schedule"`
-	Overlap  string          `toml:"overlap"`
-	Timeout  Duration        `toml:"timeout"`
-	Requires []string        `toml:"requires"`
-	SQL      SQLConfig       `toml:"sql"`
-	FTPWatch *FTPWatchConfig `toml:"ftp_watch"`
-	DBT      *DBTConfig      `toml:"dbt"`
+	Name          string          `toml:"name"`
+	Schedule      string          `toml:"schedule"`
+	Overlap       string          `toml:"overlap"`
+	Timeout       Duration        `toml:"timeout"`
+	Requires      []string        `toml:"requires"`
+	KeepArtifacts []string        `toml:"keep_artifacts"`
+	SQL           SQLConfig       `toml:"sql"`
+	FTPWatch      *FTPWatchConfig `toml:"ftp_watch"`
+	DBT           *DBTConfig      `toml:"dbt"`
 }
 
 // DBTConfig holds the dbt project configuration for a DAG.

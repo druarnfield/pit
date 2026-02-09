@@ -1,0 +1,8 @@
+[dag]
+name = "with_keep_artifacts"
+schedule = "0 6 * * *"
+keep_artifacts = ["logs"]
+
+[[tasks]]
+name = "hello"
+script = "tasks/hello.sh"

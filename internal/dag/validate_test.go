@@ -287,6 +287,44 @@ func TestValidate_FTPWatch_ValidComplete(t *testing.T) {
 	}
 }
 
+func TestValidate_KeepArtifacts_Valid(t *testing.T) {
+	cfg := &config.ProjectConfig{
+		DAG: config.DAGConfig{
+			Name:          "test",
+			KeepArtifacts: []string{"logs", "data"},
+		},
+		Tasks: []config.TaskConfig{
+			{Name: "a"},
+		},
+	}
+	errs := Validate(cfg, t.TempDir())
+	for _, e := range errs {
+		if strings.Contains(e.Error(), "keep_artifacts") {
+			t.Errorf("Validate() unexpected keep_artifacts error: %s", e)
+		}
+	}
+}
+
+func TestValidate_KeepArtifacts_Invalid(t *testing.T) {
+	cfg := &config.ProjectConfig{
+		DAG: config.DAGConfig{
+			Name:          "test",
+			KeepArtifacts: []string{"logs", "snapshots"},
+		},
+	}
+	errs := Validate(cfg, t.TempDir())
+	found := false
+	for _, e := range errs {
+		if strings.Contains(e.Error(), "snapshots") {
+			found = true
+			break
+		}
+	}
+	if !found {
+		t.Error("Validate() expected error for invalid keep_artifacts value 'snapshots'")
+	}
+}
+
 func TestValidate_ValidDBT(t *testing.T) {
 	cfg := loadTestdata(t, "valid_dbt")
 	errs := Validate(cfg, cfg.Dir())

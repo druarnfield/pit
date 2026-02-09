@@ -13,7 +13,7 @@ func TestNewServer_NoProjects(t *testing.T) {
 	dir := t.TempDir()
 	os.MkdirAll(filepath.Join(dir, "projects"), 0o755)
 
-	_, err := NewServer(dir, "", false)
+	_, err := NewServer(dir, "", false, Options{})
 	if err == nil {
 		t.Fatal("NewServer() expected error for no projects, got nil")
 	}
@@ -32,7 +32,7 @@ name = "hello"
 script = "tasks/hello.sh"
 `)
 
-	_, err := NewServer(dir, "", false)
+	_, err := NewServer(dir, "", false, Options{})
 	if err == nil {
 		t.Fatal("NewServer() expected error for no triggers, got nil")
 	}
@@ -52,7 +52,7 @@ name = "hello"
 script = "tasks/hello.sh"
 `)
 
-	s, err := NewServer(dir, "", false)
+	s, err := NewServer(dir, "", false, Options{})
 	if err != nil {
 		t.Fatalf("NewServer() error: %v", err)
 	}
@@ -81,7 +81,7 @@ name = "process"
 script = "tasks/process.py"
 `)
 
-	_, err := NewServer(dir, "", false)
+	_, err := NewServer(dir, "", false, Options{})
 	if err == nil {
 		t.Fatal("NewServer() expected error for FTP without secrets, got nil")
 	}
@@ -109,7 +109,7 @@ script = "tasks/process.py"
 ftp_pass = "secret123"
 `), 0o644)
 
-	s, err := NewServer(dir, secretsFile, false)
+	s, err := NewServer(dir, secretsFile, false, Options{})
 	if err != nil {
 		t.Fatalf("NewServer() error: %v", err)
 	}
@@ -144,7 +144,7 @@ script = "tasks/process.py"
 ftp_pass = "secret123"
 `), 0o644)
 
-	s, err := NewServer(dir, secretsFile, false)
+	s, err := NewServer(dir, secretsFile, false, Options{})
 	if err != nil {
 		t.Fatalf("NewServer() error: %v", err)
 	}
@@ -164,7 +164,7 @@ name = "hello"
 script = "tasks/hello.sh"
 `)
 
-	_, err := NewServer(dir, "", false)
+	_, err := NewServer(dir, "", false, Options{})
 	if err == nil {
 		t.Fatal("NewServer() expected error for invalid cron, got nil")
 	}

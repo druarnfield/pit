@@ -110,6 +110,33 @@ func copyDirContents(src, dst string) error {
 	return nil
 }
 
+// artifactDirMap maps keep_artifacts names to run subdirectory names.
+var artifactDirMap = map[string]string{
+	"project": "project",
+	"logs":    "logs",
+	"data":    "data",
+}
+
+// cleanupArtifacts removes run subdirectories that are not in the keep list.
+// runDir is the parent directory containing project/, logs/, and data/.
+func cleanupArtifacts(runDir string, keep []string) error {
+	keepSet := make(map[string]bool, len(keep))
+	for _, k := range keep {
+		keepSet[k] = true
+	}
+
+	for artifact, dirName := range artifactDirMap {
+		if keepSet[artifact] {
+			continue
+		}
+		path := filepath.Join(runDir, dirName)
+		if err := os.RemoveAll(path); err != nil {
+			return fmt.Errorf("removing %s: %w", dirName, err)
+		}
+	}
+	return nil
+}
+
 // copyFile copies a single file from src to dst, preserving permissions.
 func copyFile(src, dst string) error {
 	in, err := os.Open(src)

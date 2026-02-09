@@ -380,6 +380,86 @@ func TestCopyDirContents_EmptySource(t *testing.T) {
 	}
 }
 
+func TestCleanupArtifacts_KeepLogsOnly(t *testing.T) {
+	runDir := t.TempDir()
+	mkRunDirs(t, runDir)
+
+	if err := cleanupArtifacts(runDir, []string{"logs"}); err != nil {
+		t.Fatalf("cleanupArtifacts() error: %v", err)
+	}
+
+	// logs should survive
+	if _, err := os.Stat(filepath.Join(runDir, "logs")); err != nil {
+		t.Error("logs dir should survive cleanup")
+	}
+	// project and data should be removed
+	if _, err := os.Stat(filepath.Join(runDir, "project")); err == nil {
+		t.Error("project dir should be removed")
+	}
+	if _, err := os.Stat(filepath.Join(runDir, "data")); err == nil {
+		t.Error("data dir should be removed")
+	}
+}
+
+func TestCleanupArtifacts_KeepAll(t *testing.T) {
+	runDir := t.TempDir()
+	mkRunDirs(t, runDir)
+
+	if err := cleanupArtifacts(runDir, []string{"logs", "project", "data"}); err != nil {
+		t.Fatalf("cleanupArtifacts() error: %v", err)
+	}
+
+	for _, name := range []string{"logs", "project", "data"} {
+		if _, err := os.Stat(filepath.Join(runDir, name)); err != nil {
+			t.Errorf("%s dir should survive cleanup", name)
+		}
+	}
+}
+
+func TestCleanupArtifacts_KeepNone(t *testing.T) {
+	runDir := t.TempDir()
+	mkRunDirs(t, runDir)
+
+	if err := cleanupArtifacts(runDir, []string{}); err != nil {
+		t.Fatalf("cleanupArtifacts() error: %v", err)
+	}
+
+	for _, name := range []string{"logs", "project", "data"} {
+		if _, err := os.Stat(filepath.Join(runDir, name)); err == nil {
+			t.Errorf("%s dir should be removed", name)
+		}
+	}
+}
+
+func TestCleanupArtifacts_KeepLogsAndData(t *testing.T) {
+	runDir := t.TempDir()
+	mkRunDirs(t, runDir)
+
+	if err := cleanupArtifacts(runDir, []string{"logs", "data"}); err != nil {
+		t.Fatalf("cleanupArtifacts() error: %v", err)
+	}
+
+	if _, err := os.Stat(filepath.Join(runDir, "logs")); err != nil {
+		t.Error("logs dir should survive cleanup")
+	}
+	if _, err := os.Stat(filepath.Join(runDir, "data")); err != nil {
+		t.Error("data dir should survive cleanup")
+	}
+	if _, err := os.Stat(filepath.Join(runDir, "project")); err == nil {
+		t.Error("project dir should be removed")
+	}
+}
+
+// mkRunDirs creates the three standard run subdirectories with dummy files.
+func mkRunDirs(t *testing.T, runDir string) {
+	t.Helper()
+	for _, name := range []string{"project", "logs", "data"} {
+		dir := filepath.Join(runDir, name)
+		os.MkdirAll(dir, 0o755)
+		os.WriteFile(filepath.Join(dir, "test.txt"), []byte("content"), 0o644)
+	}
+}
+
 // taskNames extracts names from a slice of TaskInstances.
 func taskNames(tasks []*TaskInstance) []string {
 	names := make([]string, len(tasks))

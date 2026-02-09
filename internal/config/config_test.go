@@ -131,6 +131,19 @@ func TestLoad(t *testing.T) {
 		}
 	})
 
+	t.Run("keep_artifacts", func(t *testing.T) {
+		cfg, err := Load(filepath.Join("testdata", "keep_artifacts.toml"))
+		if err != nil {
+			t.Fatalf("Load() error: %v", err)
+		}
+		if len(cfg.DAG.KeepArtifacts) != 1 {
+			t.Fatalf("len(KeepArtifacts) = %d, want 1", len(cfg.DAG.KeepArtifacts))
+		}
+		if cfg.DAG.KeepArtifacts[0] != "logs" {
+			t.Errorf("KeepArtifacts[0] = %q, want %q", cfg.DAG.KeepArtifacts[0], "logs")
+		}
+	})
+
 	t.Run("dbt project", func(t *testing.T) {
 		cfg, err := Load(filepath.Join("testdata", "dbt_project.toml"))
 		if err != nil {

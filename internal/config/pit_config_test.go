@@ -3,6 +3,7 @@ package config
 import (
 	"os"
 	"path/filepath"
+	"strings"
 	"testing"
 )
 
@@ -82,6 +83,86 @@ func TestLoadPitConfig(t *testing.T) {
 		}
 		if cfg.SecretsDir != "" {
 			t.Errorf("SecretsDir = %q, want empty", cfg.SecretsDir)
+		}
+	})
+
+	t.Run("full config", func(t *testing.T) {
+		dir := t.TempDir()
+		content := `
+secrets_dir = "secrets/secrets.toml"
+runs_dir = "output/runs"
+dbt_driver = "ODBC Driver 17 for SQL Server"
+keep_artifacts = ["logs", "data"]
+`
+		if err := os.WriteFile(filepath.Join(dir, "pit_config.toml"), []byte(content), 0o644); err != nil {
+			t.Fatal(err)
+		}
+
+		cfg, err := LoadPitConfig(dir)
+		if err != nil {
+			t.Fatalf("LoadPitConfig() error: %v", err)
+		}
+
+		wantRuns := filepath.Join(dir, "output", "runs")
+		if cfg.RunsDir != wantRuns {
+			t.Errorf("RunsDir = %q, want %q", cfg.RunsDir, wantRuns)
+		}
+		if cfg.DBTDriver != "ODBC Driver 17 for SQL Server" {
+			t.Errorf("DBTDriver = %q, want %q", cfg.DBTDriver, "ODBC Driver 17 for SQL Server")
+		}
+		if len(cfg.KeepArtifacts) != 2 {
+			t.Fatalf("len(KeepArtifacts) = %d, want 2", len(cfg.KeepArtifacts))
+		}
+		if cfg.KeepArtifacts[0] != "logs" || cfg.KeepArtifacts[1] != "data" {
+			t.Errorf("KeepArtifacts = %v, want [logs data]", cfg.KeepArtifacts)
+		}
+	})
+
+	t.Run("runs_dir absolute unchanged", func(t *testing.T) {
+		dir := t.TempDir()
+		content := `runs_dir = "/var/pit/runs"` + "\n"
+		if err := os.WriteFile(filepath.Join(dir, "pit_config.toml"), []byte(content), 0o644); err != nil {
+			t.Fatal(err)
+		}
+
+		cfg, err := LoadPitConfig(dir)
+		if err != nil {
+			t.Fatalf("LoadPitConfig() error: %v", err)
+		}
+		if cfg.RunsDir != "/var/pit/runs" {
+			t.Errorf("RunsDir = %q, want %q", cfg.RunsDir, "/var/pit/runs")
+		}
+	})
+
+	t.Run("invalid keep_artifacts", func(t *testing.T) {
+		dir := t.TempDir()
+		content := `keep_artifacts = ["logs", "snapshots"]` + "\n"
+		if err := os.WriteFile(filepath.Join(dir, "pit_config.toml"), []byte(content), 0o644); err != nil {
+			t.Fatal(err)
+		}
+
+		_, err := LoadPitConfig(dir)
+		if err == nil {
+			t.Fatal("LoadPitConfig() expected error for invalid keep_artifacts, got nil")
+		}
+		if !strings.Contains(err.Error(), "snapshots") {
+			t.Errorf("error = %q, want it to mention invalid value", err)
+		}
+	})
+
+	t.Run("empty keep_artifacts", func(t *testing.T) {
+		dir := t.TempDir()
+		content := `keep_artifacts = []` + "\n"
+		if err := os.WriteFile(filepath.Join(dir, "pit_config.toml"), []byte(content), 0o644); err != nil {
+			t.Fatal(err)
+		}
+
+		cfg, err := LoadPitConfig(dir)
+		if err != nil {
+			t.Fatalf("LoadPitConfig() error: %v", err)
+		}
+		if len(cfg.KeepArtifacts) != 0 {
+			t.Errorf("KeepArtifacts = %v, want empty", cfg.KeepArtifacts)
 		}
 	})
 }

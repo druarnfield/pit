@@ -56,9 +56,12 @@ func newRunCmd() *cobra.Command {
 			defer stop()
 
 			opts := engine.ExecuteOpts{
-				TaskName:    taskName,
-				Verbose:     verbose,
-				SecretsPath: secretsPath,
+				RunsDir:       resolveRunsDir(),
+				TaskName:      taskName,
+				Verbose:       verbose,
+				SecretsPath:   secretsPath,
+				DBTDriver:     resolveDBTDriver(),
+				KeepArtifacts: resolveKeepArtifacts(cfg.DAG.KeepArtifacts),
 			}
 
 			run, err := engine.Execute(ctx, cfg, opts)

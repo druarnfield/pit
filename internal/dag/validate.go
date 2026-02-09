@@ -113,6 +113,16 @@ func Validate(cfg *config.ProjectConfig, projectDir string) []*ValidationError {
 		errs = append(errs, validateFTPWatch(cfg.DAG.FTPWatch, dagName)...)
 	}
 
+	// Validate keep_artifacts
+	for _, a := range cfg.DAG.KeepArtifacts {
+		if !config.ValidArtifacts[a] {
+			errs = append(errs, &ValidationError{
+				DAG:     dagName,
+				Message: fmt.Sprintf("invalid keep_artifacts value %q (must be logs, project, or data)", a),
+			})
+		}
+	}
+
 	// Validate dbt config
 	if cfg.DAG.DBT != nil {
 		errs = append(errs, validateDBT(cfg.DAG.DBT, dagName, projectDir)...)

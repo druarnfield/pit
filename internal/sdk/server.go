@@ -23,7 +23,7 @@ type Response struct {
 }
 
 // HandlerFunc processes an SDK request and returns a result or error string.
-type HandlerFunc func(params map[string]string) (string, error)
+type HandlerFunc func(ctx context.Context, params map[string]string) (string, error)
 
 // SecretsResolver resolves secrets by project scope.
 type SecretsResolver interface {
@@ -39,6 +39,9 @@ type Server struct {
 	dagName    string
 	handlers   map[string]HandlerFunc
 	wg         sync.WaitGroup
+
+	mu       sync.Mutex
+	serveCtx context.Context // set by Serve(), passed to handlers
 }
 
 // NewServer creates a socket listener and registers the default handlers.
@@ -59,7 +62,7 @@ func NewServer(socketPath string, store SecretsResolver, dagName string) (*Serve
 	}
 
 	if store != nil {
-		s.handlers["get_secret"] = func(params map[string]string) (string, error) {
+		s.handlers["get_secret"] = func(_ context.Context, params map[string]string) (string, error) {
 			key := params["key"]
 			if key == "" {
 				return "", fmt.Errorf("missing required parameter: key")
@@ -69,6 +72,11 @@ func NewServer(socketPath string, store SecretsResolver, dagName string) (*Serve
 	}
 
 	return s, nil
+}
+
+// RegisterHandler adds or replaces a method handler on the server.
+func (s *Server) RegisterHandler(method string, handler HandlerFunc) {
+	s.handlers[method] = handler
 }
 
 // listen creates a platform-appropriate network listener.
@@ -99,6 +107,10 @@ func (s *Server) Addr() string {
 
 // Serve accepts connections until the context is cancelled.
 func (s *Server) Serve(ctx context.Context) error {
+	s.mu.Lock()
+	s.serveCtx = ctx
+	s.mu.Unlock()
+
 	go func() {
 		<-ctx.Done()
 		s.listener.Close()
@@ -151,7 +163,14 @@ func (s *Server) handleConn(conn net.Conn) {
 		return
 	}
 
-	result, err := handler(req.Params)
+	s.mu.Lock()
+	ctx := s.serveCtx
+	s.mu.Unlock()
+	if ctx == nil {
+		ctx = context.Background()
+	}
+
+	result, err := handler(ctx, req.Params)
 	var resp Response
 	if err != nil {
 		resp.Error = err.Error()

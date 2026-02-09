@@ -14,6 +14,7 @@ func TestValidType(t *testing.T) {
 		{"python", true},
 		{"sql", true},
 		{"shell", true},
+		{"dbt", true},
 		{"ruby", false},
 		{"", false},
 		{"Python", false},
@@ -80,6 +81,25 @@ func TestCreate_SQL(t *testing.T) {
 	wantFiles := []string{
 		"projects/sql_dag/pit.toml",
 		"projects/sql_dag/tasks/example.sql",
+	}
+	for _, f := range wantFiles {
+		path := filepath.Join(root, f)
+		if _, err := os.Stat(path); err != nil {
+			t.Errorf("missing expected file: %s", f)
+		}
+	}
+}
+
+func TestCreate_DBT(t *testing.T) {
+	root := t.TempDir()
+
+	if err := Create(root, "dbt_dag", TypeDBT); err != nil {
+		t.Fatalf("Create() error: %v", err)
+	}
+
+	wantFiles := []string{
+		"projects/dbt_dag/pit.toml",
+		"projects/dbt_dag/dbt_repo/dbt_project.yml",
 	}
 	for _, f := range wantFiles {
 		path := filepath.Join(root, f)

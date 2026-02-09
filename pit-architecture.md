@@ -1,6 +1,6 @@
 # Pit — Lightweight Data Orchestration
 
-A minimal, opinionated orchestration tool for small-to-medium data teams. Go orchestrator, language-agnostic task execution, DuckLake for inter-task data, SQLite for metadata.
+A minimal, opinionated orchestration tool for small-to-medium data teams. Go orchestrator, language-agnostic task execution, Parquet files for inter-task data, SQLite for metadata.
 
 ---
 
@@ -321,9 +321,11 @@ runs/
     │   └── tasks/
     │       ├── extract.py
     │       └── validate.py
-    └── logs/              # task log files for this run
-        ├── extract.log
-        └── validate.log
+    ├── logs/              # task log files for this run
+    │   ├── extract.log
+    │   └── validate.log
+    └── data/              # inter-task Parquet files
+        └── extracted_claims.parquet
 ```
 
 **Why:**
@@ -351,6 +353,7 @@ Each task runs based on its runner type — either as an isolated subprocess or 
 | `PIT_RUN_ID` env var | Current run identifier |
 | `PIT_TASK_NAME` env var | Current task name |
 | `PIT_DAG_NAME` env var | Current DAG name |
+| `PIT_DATA_DIR` env var | Path to run's data directory for inter-task Parquet files |
 | stdout / stderr | Written to log file in run directory |
 | Exit code | 0 = success, non-zero = failure |
 
@@ -418,21 +421,19 @@ The command after `$` is used as the prefix. Same subprocess contract as shell t
 → {"method": "get_secret", "params": {"key": "claims_db"}}
 ← {"result": "Server=...", "error": null}
 
-→ {"method": "mssql_query", "params": {"conn": "claims_db", "sql": "SELECT ..."}}
-← {"result": [{"id": 1, "name": "..."}], "error": null}
-
-→ {"method": "mssql_bulk_insert", "params": {"conn": "warehouse", "table": "staging.claims", ...}}
-← {"result": {"rows_inserted": 50000}, "error": null}
+→ {"method": "load_data", "params": {"file": "output.parquet", "table": "staging.claims", "connection": "claims_db", "schema": "dbo", "mode": "append"}}
+← {"result": "50000 rows loaded", "error": null}
 ```
 
-**Python side (~50 lines):** Thin client that reads `PIT_SOCKET` from env, sends JSON, reads JSON.
+**Python side:** Thin client that reads `PIT_SOCKET` from env, sends JSON, reads JSON. Database reads use ConnectorX (Rust-native, no ODBC). Database writes go through the Go orchestrator's Parquet-based bulk loader.
 
 ```python
-from pit import sdk
+from pit_sdk import get_secret, read_sql, write_output, load_data
 
-conn_str = sdk.get_secret("claims_db")
-rows = sdk.mssql_query("claims_db", "SELECT * FROM claims")
-sdk.mssql_bulk_insert("warehouse", "staging.claims", data)
+conn_str = get_secret("claims_db")
+table = read_sql(conn_str, "SELECT * FROM claims")
+write_output("claims", table)
+load_data("claims.parquet", "staging.claims", "claims_db")
 ```
 
 **Design principles:**
@@ -529,13 +530,13 @@ High-performance I/O operations embedded in the Go binary, exposed to tasks via 
 
 | Connector | Use case | Why Go |
 |-----------|----------|--------|
-| MSSQL query | Run queries, return results | go-mssqldb: pure TDS, no ODBC |
-| MSSQL bulk insert | High-throughput loads via `mssql.CopyIn` | TDS bulk copy, zero external deps |
+| MSSQL bulk load | High-throughput Parquet → table via `mssql.CopyIn` | TDS bulk copy, zero external deps |
+| MSSQL query (SQL runner) | Execute `.sql` files in-process | go-mssqldb: pure TDS, no ODBC |
 | SMTP | Email notifications and alerts | Already built |
 | HTTP | API calls with retry/backoff | Go stdlib |
 | Minio/S3 | File storage for large artifacts | Native Go SDK |
 
-**Dual use:** Go connectors serve two purposes — they're available to Python tasks via the SDK socket, and they're used directly by the Go SQL operator for `.sql` task execution. Same connection infrastructure, same secrets resolution.
+**Architecture:** Database reads use ConnectorX (Rust-native) from Python — no ODBC. Database writes use the Go `load_data` RPC handler which reads Parquet files (Arrow Go) and bulk-loads via the native driver. The SQL runner executes `.sql` files directly against configured connections.
 
 **Adding Go connectors:** Write a handler function, register it on the socket router, add a corresponding Python SDK function.
 
@@ -543,49 +544,49 @@ High-performance I/O operations embedded in the Go binary, exposed to tasks via 
 
 ---
 
-### 11. Inter-Task Data (DuckLake)
+### 11. Inter-Task Data (Parquet Files)
 
-**Runtime:** DuckDB + DuckLake extension
+**Runtime:** Arrow (Go + Python)
 
-Typed, versioned, schema-enforced data passing between tasks within a project. This is internal scratch space — not shared across projects.
+Named Parquet files for data passing between tasks within a run. Each run gets a `data/` directory at `runs/{run_id}/data/`. Tasks discover it via the `PIT_DATA_DIR` environment variable.
 
-**Setup:**
-
-- DuckLake catalog in SQLite (separate from Pit metadata)
-- Data stored as Parquet files on local disk
-- Each task writes to / reads from DuckLake tables using standard SQL via DuckDB
-
-**Writing data (in a task):**
+**Writing data (Python task):**
 
 ```python
-import duckdb
+from pit_sdk import write_output
 
-conn = duckdb.connect()
-conn.execute("ATTACH 'ducklake:catalog.db' AS lake (DATA_PATH 'data/')")
-conn.execute("INSERT INTO lake.pipeline.raw_claims SELECT * FROM df")
+write_output("raw_claims", arrow_table)  # writes {data_dir}/raw_claims.parquet
 ```
 
-**Reading data (in a downstream task):**
+**Reading data (downstream Python task):**
 
 ```python
-conn.execute("ATTACH 'ducklake:catalog.db' AS lake (DATA_PATH 'data/')")
-df = conn.execute("SELECT * FROM lake.pipeline.raw_claims").fetchdf()
+from pit_sdk import read_input
+
+table = read_input("raw_claims")  # reads {data_dir}/raw_claims.parquet
 ```
 
-**Retention:**
+**Loading data into a database (Python task → Go bulk loader):**
 
-- Scheduled cleanup expires snapshots older than N days
-- `ducklake_expire_snapshots` + `ducklake_cleanup_old_files`
-- Configurable retention period
-- Time travel within retention window for debugging failed runs
+```python
+from pit_sdk import load_data
 
-**Why DuckLake over raw files or XCom:**
+load_data("raw_claims.parquet", "staging_claims", "warehouse_db")
+```
 
-- Real tables with enforced schemas, not serialised blobs
-- Handles any data volume — it's just Parquet underneath
-- Time travel for inspecting exactly what a task produced at any point
-- No coupling to orchestrator metadata
-- If DuckLake development stopped tomorrow, you'd still have standard Parquet files and a queryable SQLite catalog
+The `load_data` call sends an RPC to the Go orchestrator, which reads the Parquet file using Arrow Go and bulk-loads it into the target database using the native driver (MSSQL via TDS bulk copy). No ODBC drivers required.
+
+**Database reads:** Python tasks use ConnectorX (Rust-native) via `read_sql()` — also no ODBC drivers required.
+
+**Why Parquet files:**
+
+- Standard, portable format — readable by any language or tool
+- Columnar and compressed — efficient for analytical workloads
+- No extra infrastructure — just files on disk
+- Easy to inspect: `duckdb` CLI, `pyarrow.parquet`, `pandas.read_parquet`
+- Cleanup is simple: delete the run directory
+
+**DuckDB:** Users who want DuckDB for in-task analytics can add it as a Python dependency. It's not bundled with the Go orchestrator (too much binary bloat).
 
 ---
 
@@ -603,7 +604,7 @@ df = conn.execute("SELECT * FROM lake.pipeline.raw_claims").fetchdf()
 - Run directories (including logs) are cleaned up based on age — configurable retention period
 - Deleting a run directory removes everything: snapshot, logs, all in one place
 
-**Later:** Archive completed logs to DuckLake for historical queries ("show me all errors from last week"). Same `pit logs` interface, backed by Parquet instead of files. Not needed until someone asks for it.
+**Later:** Archive completed logs for historical queries ("show me all errors from last week"). Not needed until someone asks for it.
 
 ---
 
@@ -727,10 +728,8 @@ pit:latest
 ├── pit binary (~15MB)
 ├── uv + python         (only needed if projects use Python tasks)
 ├── projects/           (git clone, periodically pulled)
-├── runs/               (run snapshots + logs, persistent volume)
-├── data/               (DuckLake parquet, persistent volume)
+├── runs/               (run snapshots, logs, and inter-task data, persistent volume)
 ├── metadata.db         (Pit state, persistent volume)
-└── catalog.db          (DuckLake catalog, persistent volume)
 
 /etc/pit/
 └── secrets.toml        (outside repo, not in git)

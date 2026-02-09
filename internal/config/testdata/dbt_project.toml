@@ -1,0 +1,30 @@
+[dag]
+name = "dbt_analytics"
+schedule = "0 7 * * *"
+overlap = "skip"
+timeout = "2h"
+
+[dag.dbt]
+version = "1.9.1"
+adapter = "dbt-sqlserver"
+extra_deps = ["dbt-utils"]
+project_dir = "dbt_repo"
+profile = "analytics"
+target = "prod"
+
+[[tasks]]
+name = "staging"
+script = "run --select staging"
+runner = "dbt"
+
+[[tasks]]
+name = "marts"
+script = "run --select marts"
+runner = "dbt"
+depends_on = ["staging"]
+
+[[tasks]]
+name = "test"
+script = "test"
+runner = "dbt"
+depends_on = ["marts"]

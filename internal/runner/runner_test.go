@@ -174,11 +174,10 @@ func TestDetectDriver(t *testing.T) {
 		{name: "sqlserver uri", connStr: "sqlserver://user:pass@host:1433?database=db", wantDriver: "mssql"},
 		{name: "mssql uri", connStr: "mssql://user:pass@host/db", wantDriver: "mssql"},
 		{name: "sqlserver uppercase", connStr: "SQLSERVER://HOST/DB", wantDriver: "mssql"},
-		{name: "duckdb uri", connStr: "duckdb:///path/to/db", wantDriver: "duckdb"},
-		{name: "db file path", connStr: "/data/warehouse.db", wantDriver: "duckdb"},
-		{name: "duckdb file path", connStr: "/data/warehouse.duckdb", wantDriver: "duckdb"},
 		{name: "unknown scheme", connStr: "postgres://host/db", wantErr: true},
 		{name: "plain string", connStr: "just-a-string", wantErr: true},
+		{name: "duckdb uri", connStr: "duckdb:///path/to/db", wantErr: true},
+		{name: "db file path", connStr: "/data/warehouse.db", wantErr: true},
 	}
 
 	for _, tt := range tests {

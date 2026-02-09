@@ -29,6 +29,7 @@ type Run struct {
 	DAGName     string
 	SnapshotDir string
 	LogDir      string
+	DataDir     string
 	Status      TaskStatus
 	StartedAt   time.Time
 	EndedAt     time.Time

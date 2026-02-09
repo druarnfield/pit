@@ -25,6 +25,7 @@ go build ./cmd/pit
 pit init my_pipeline                 # Python project (full package layout)
 pit init --type sql my_transforms    # SQL-only project (minimal)
 pit init --type shell my_jobs        # Shell-only project
+pit init --type dbt my_dbt_project   # dbt project (uvx-managed)
 
 # Validate all project configs
 pit validate
@@ -33,6 +34,10 @@ pit validate
 pit run my_pipeline                  # run entire DAG
 pit run my_pipeline/extract          # run a single task
 pit run my_pipeline --verbose        # stream task output to stdout
+
+# Start the scheduler (cron + FTP watch triggers)
+pit serve                            # runs until SIGINT/SIGTERM
+pit serve --verbose                  # with live task output
 
 # View logs from past runs
 pit logs my_pipeline                 # latest run, all tasks
@@ -66,11 +71,17 @@ projects/
 │   └── tasks/
 │       ├── staging_claims.sql
 │       └── dim_providers.sql
-└── nightly_maintenance/       # Shell-only project
-    ├── pit.toml
-    └── tasks/
-        ├── vacuum_db.sh
-        └── archive_logs.sh
+├── nightly_maintenance/       # Shell-only project
+│   ├── pit.toml
+│   └── tasks/
+│       ├── vacuum_db.sh
+│       └── archive_logs.sh
+└── analytics_dbt/             # dbt project
+    ├── pit.toml               # [dag.dbt] config
+    └── dbt_repo/              # dbt project root
+        ├── dbt_project.yml
+        ├── models/
+        └── tests/
 ```
 
 ## DAG Configuration
@@ -116,6 +127,7 @@ Runner is determined by file extension, with an optional override:
 | `.py`     | `python`      | `uv run --project {project_dir} {script}` |
 | `.sh`     | `bash`        | `bash {script}` |
 | `.sql`    | `sql`         | Go SQL operator against `[dag.sql]` connection |
+| n/a       | `dbt`         | `uvx dbt {command}` via `[dag.dbt]` config |
 
 Custom runners use the `$ prefix` syntax:
 
@@ -133,8 +145,9 @@ runner = "$ node"              # runs: node tasks/transform.js
 | Command | Description |
 |---------|-------------|
 | `pit validate` | Validate all `pit.toml` files (cycles, missing deps, script paths) |
-| `pit init <name>` | Scaffold a new project (`--type python\|sql\|shell`) |
+| `pit init <name>` | Scaffold a new project (`--type python\|sql\|shell\|dbt`) |
 | `pit run <dag>[/<task>]` | Execute a DAG or single task (`--verbose` for live output) |
+| `pit serve` | Run the scheduler with cron and FTP watch triggers |
 | `pit logs <dag>[/<task>]` | View task logs (`--list` for runs, `--run-id` for specific run) |
 | `pit outputs` | List declared outputs (`--project`, `--type`, `--location` filters) |
 
@@ -154,11 +167,15 @@ When a run begins, Pit copies the project directory to a snapshot. Tasks execute
 runs/
 └── 20240115_143022.123_claims_pipeline/
     ├── project/     # frozen copy of the project
-    └── logs/        # per-task log files
-        ├── extract.log
-        ├── validate.log
-        └── load.log
+    ├── logs/        # per-task log files
+    │   ├── extract.log
+    │   ├── validate.log
+    │   └── load.log
+    └── data/        # inter-task Parquet files
+        └── extracted_claims.parquet
 ```
+
+The `data/` directory is used for inter-task data passing. Tasks discover it via the `PIT_DATA_DIR` environment variable.
 
 ## Execution Model
 
@@ -167,6 +184,55 @@ runs/
 - Per-task and per-DAG timeouts via context cancellation
 - Failed tasks mark all downstream tasks as `upstream_failed`
 - Task states: `pending` → `running` → `success | failed | skipped | upstream_failed`
+
+## Automated Scheduling
+
+`pit serve` runs as a long-lived process, monitoring all projects for scheduled triggers and FTP file watches.
+
+### Cron Triggers
+
+Set `schedule` in `pit.toml` using standard cron syntax (5-field):
+
+```toml
+[dag]
+name = "nightly_etl"
+schedule = "0 6 * * *"    # 6 AM daily
+overlap = "skip"           # skip if previous run still active
+```
+
+### FTP Watch Triggers
+
+Monitor an FTP server for incoming files. When files matching the pattern are stable (unchanged size for `stable_seconds`), a DAG run is triggered with the files seeded into the run's `data/` directory.
+
+```toml
+[dag]
+name = "sales_ingest"
+overlap = "skip"
+
+[dag.ftp_watch]
+host = "ftp.example.com"
+port = 21
+user = "data_user"
+password_secret = "ftp_password"    # resolved from secrets
+tls = true
+directory = "/incoming/sales"
+pattern = "sales_*.csv"
+archive_dir = "/archive/sales"      # move files here after success
+poll_interval = "30s"
+stable_seconds = 30                  # wait for file to stop growing
+```
+
+Both trigger types can be combined on the same DAG.
+
+## Workspace Configuration
+
+Create a `pit_config.toml` in the project root to set workspace-level defaults:
+
+```toml
+secrets_dir = "secrets/secrets.toml"
+```
+
+This avoids passing `--secrets` on every command. Relative paths are resolved from the project root. The CLI flag takes precedence if both are set.
 
 ## Development
 
@@ -202,24 +268,42 @@ smtp_password = "..."
 claims_db = "sqlserver://user:pass@host/db"
 
 [warehouse_transforms]
-warehouse_db = "duckdb:///data/warehouse.duckdb"
+warehouse_db = "sqlserver://user:pass@host/warehouse"
 ```
 
 Resolution order: project-scoped section first, then `[global]`.
 
 ## SDK Socket
 
-When `--secrets` is provided, Pit starts a JSON-over-socket server (Unix domain socket on Linux/macOS, TCP localhost on Windows). Tasks can connect via the `PIT_SOCKET` environment variable to request secrets at runtime.
+Pit starts a JSON-over-socket server for every run (Unix domain socket on Linux/macOS, TCP localhost on Windows). Tasks connect via the `PIT_SOCKET` environment variable. When `--secrets` is provided, the server can resolve secrets and load data into databases.
 
 Python tasks use the bundled SDK client:
 
 ```python
-from pit.sdk import get_secret
+from pit_sdk import get_secret, read_sql, write_output, load_data
 
+# Read secrets
 conn_str = get_secret("claims_db")
+
+# Read from database (ConnectorX — no ODBC drivers needed)
+table = read_sql(conn_str, "SELECT * FROM staging.claims")
+
+# Write inter-task data
+write_output("claims", table)
+
+# Bulk-load Parquet into database (Go-side, no ODBC)
+load_data("claims.parquet", "target_table", "claims_db")
 ```
 
-The SDK client is at `sdk/python/pit/sdk.py`.
+### Environment Variables
+
+| Variable | Description |
+|----------|-------------|
+| `PIT_RUN_ID` | Current run identifier |
+| `PIT_TASK_NAME` | Current task name |
+| `PIT_DAG_NAME` | Current DAG name |
+| `PIT_SOCKET` | SDK server address |
+| `PIT_DATA_DIR` | Path to run's data directory for Parquet files |
 
 ## SQL Execution
 
@@ -238,9 +322,88 @@ The connection name is resolved from the secrets file. Supported drivers:
 | Connection string prefix | Driver |
 |-------------------------|--------|
 | `sqlserver://`, `mssql://` | Microsoft SQL Server |
-| `duckdb://`, `.db`/`.duckdb` file path | DuckDB |
 
 Without `--secrets`, SQL tasks fall back to stub mode (log file contents without executing).
+
+## dbt Projects
+
+Pit can orchestrate dbt projects managed by other teams. dbt is executed via `uvx` (no global install needed), and `profiles.yml` is generated at runtime from Pit secrets.
+
+### dbt Configuration
+
+```toml
+[dag]
+name = "analytics_dbt"
+schedule = "0 7 * * *"
+overlap = "skip"
+timeout = "2h"
+
+[dag.dbt]
+version = "1.9.1"              # dbt-core version
+adapter = "dbt-sqlserver"       # pip package name for the adapter
+extra_deps = ["dbt-utils"]      # additional pip packages (optional)
+project_dir = "dbt_repo"        # relative path to dbt project root
+profile = "analytics"           # profile name in profiles.yml (default: dag name)
+target = "prod"                 # target name (default: "prod")
+
+[[tasks]]
+name = "staging"
+script = "run --select staging"  # dbt command (not a file path)
+runner = "dbt"
+
+[[tasks]]
+name = "marts"
+script = "run --select marts"
+runner = "dbt"
+depends_on = ["staging"]
+
+[[tasks]]
+name = "test"
+script = "test"
+runner = "dbt"
+depends_on = ["marts"]
+```
+
+For dbt tasks, the `script` field contains the dbt subcommand and arguments (e.g. `"run --select staging"`), not a file path. The `runner` field must be set to `"dbt"`.
+
+### dbt Secrets
+
+dbt connection details are resolved from the secrets file using these keys:
+
+```toml
+[analytics_dbt]
+dbt_host = "sql-server.example.com"
+dbt_port = "1433"
+dbt_database = "analytics"
+dbt_schema = "dbo"
+dbt_user = "dbt_user"
+dbt_password = "secret123"
+```
+
+Pit generates a `profiles.yml` in a temporary directory before each run and sets `DBT_PROFILES_DIR` so dbt picks it up automatically.
+
+### dbt JSON Log Parsing
+
+dbt is invoked with `--log-format json`. Pit parses the JSON output and displays key events:
+
+- Model results: `OK stg_orders (2.5s, 1500 rows)`
+- Test results: `PASS not_null_orders_id (0.3s)`
+- Freshness results: `FRESH raw_orders`
+- Completion: `Completed in 15.7s`
+
+## Python SDK
+
+The Python SDK (`sdk/python/`) provides helpers for tasks running under Pit:
+
+| Function | Description |
+|----------|-------------|
+| `get_secret(key)` | Retrieve a secret from the orchestrator's secrets store |
+| `read_sql(conn, query)` | Read from a database via ConnectorX (returns Arrow Table) |
+| `write_output(name, data)` | Write Arrow/pandas/polars data to Parquet in the data directory |
+| `read_input(name)` | Read a named Parquet file from the data directory |
+| `load_data(file, table, conn)` | Trigger Go-side bulk load of Parquet into a database |
+
+Database reads use ConnectorX (Rust-native, no ODBC drivers needed). Database writes go through the Go orchestrator's bulk loader via RPC (also no ODBC).
 
 ## Roadmap
 
@@ -254,16 +417,14 @@ The following features are planned but not yet implemented. See `pit-architectur
 
 ### Mid-term
 
-- **`pit serve`** — Production scheduler with REST API. Cron-based scheduling via robfig/cron, manual triggers, config hot-reload.
 - **SQLite metadata store** — Persistent run history, task instance tracking, environment hashes. WAL mode for concurrent access.
-- **DuckLake inter-task data** — Typed, versioned data passing between tasks via DuckDB + DuckLake. Schema-enforced, time-travel capable. Required for meaningful Python pipelines.
 - **Notifications** — Email on DAG failure via SMTP connector, webhook support for Slack/Teams.
-- **Go connectors** — MSSQL query/bulk insert, SMTP, HTTP, Minio/S3 — all exposed via SDK socket.
+- **Additional Go connectors** — SMTP, HTTP, Minio/S3 — exposed via SDK socket.
 
 ### Long-term
 
 - **REST API** — Full API for DAG status, run history, task logs, outputs registry, manual triggers.
 - **Status dashboard** — Read-only web UI for monitoring DAGs, viewing logs, browsing outputs.
 - **SDK socket authentication** — Per-connection auth, secret access audit logging, per-project ACLs.
-- **Log archival** — Archive completed run logs to DuckLake for historical queries.
+- **Log archival** — Archive completed run logs for historical queries.
 - **Encrypted secrets** — At-rest encryption, key rotation, connection pooling across tasks.

@@ -6,10 +6,12 @@ import (
 	"io"
 	"os"
 	"path/filepath"
+	"strings"
 	"sync"
 	"time"
 
 	"github.com/druarnfield/pit/internal/config"
+	"github.com/druarnfield/pit/internal/loader"
 	"github.com/druarnfield/pit/internal/runner"
 	"github.com/druarnfield/pit/internal/sdk"
 	"github.com/druarnfield/pit/internal/secrets"
@@ -22,6 +24,7 @@ type ExecuteOpts struct {
 	Verbose     bool   // stream task output to stdout
 	Concurrency int    // max parallel tasks (0 = unlimited)
 	SecretsPath string // path to secrets.toml (optional, empty = no secrets)
+	DataSeedDir string // if set, copy contents into data dir before execution
 }
 
 // Execute runs a DAG to completion.
@@ -33,9 +36,16 @@ func Execute(ctx context.Context, cfg *config.ProjectConfig, opts ExecuteOpts) (
 	runID := GenerateRunID(cfg.DAG.Name)
 
 	// Snapshot the project
-	snapshotDir, logDir, err := Snapshot(cfg.Dir(), opts.RunsDir, runID)
+	snapshotDir, logDir, dataDir, err := Snapshot(cfg.Dir(), opts.RunsDir, runID)
 	if err != nil {
 		return nil, fmt.Errorf("snapshot: %w", err)
+	}
+
+	// Seed data directory with files if configured
+	if opts.DataSeedDir != "" {
+		if err := copyDirContents(opts.DataSeedDir, dataDir); err != nil {
+			return nil, fmt.Errorf("seeding data dir: %w", err)
+		}
 	}
 
 	// Load secrets and start SDK server if configured
@@ -48,22 +58,22 @@ func Execute(ctx context.Context, cfg *config.ProjectConfig, opts ExecuteOpts) (
 		}
 	}
 
-	var sdkServer *sdk.Server
-	var socketPath string
-	if store != nil {
-		socketHint := filepath.Join(os.TempDir(), fmt.Sprintf("pit-%d.sock", os.Getpid()))
-		sdkServer, err = sdk.NewServer(socketHint, store, cfg.DAG.Name)
-		if err != nil {
-			return nil, fmt.Errorf("starting SDK server: %w", err)
-		}
-		socketPath = sdkServer.Addr() // actual address: socket path (Unix) or host:port (Windows)
-		sdkCtx, sdkCancel := context.WithCancel(context.Background())
-		go sdkServer.Serve(sdkCtx)
-		defer func() {
-			sdkCancel()
-			sdkServer.Shutdown()
-		}()
+	socketHint := filepath.Join(os.TempDir(), fmt.Sprintf("pit-%d.sock", os.Getpid()))
+	sdkServer, err := sdk.NewServer(socketHint, store, cfg.DAG.Name)
+	if err != nil {
+		return nil, fmt.Errorf("starting SDK server: %w", err)
 	}
+
+	// Register the load_data handler for Python SDK → Go bulk load
+	sdkServer.RegisterHandler("load_data", makeLoadDataHandler(store, cfg.DAG.Name, dataDir))
+
+	socketPath := sdkServer.Addr()
+	sdkCtx, sdkCancel := context.WithCancel(context.Background())
+	go sdkServer.Serve(sdkCtx)
+	defer func() {
+		sdkCancel()
+		sdkServer.Shutdown()
+	}()
 
 	// Build Run from config
 	run := &Run{
@@ -71,6 +81,7 @@ func Execute(ctx context.Context, cfg *config.ProjectConfig, opts ExecuteOpts) (
 		DAGName:         cfg.DAG.Name,
 		SnapshotDir:     snapshotDir,
 		LogDir:          logDir,
+		DataDir:         dataDir,
 		Status:          StatusRunning,
 		StartedAt:       time.Now(),
 		SocketPath:      socketPath,
@@ -279,14 +290,59 @@ func executeTask(ctx context.Context, ti *TaskInstance, run *Run, cfg *config.Pr
 
 	scriptPath := filepath.Join(run.SnapshotDir, ti.Script)
 
-	r, err := runner.Resolve(ti.Runner, scriptPath)
-	if err != nil {
-		run.mu.Lock()
-		ti.Status = StatusFailed
-		ti.Error = err
-		ti.EndedAt = time.Now()
-		run.mu.Unlock()
-		return
+	// Resolve the runner — dbt is special-cased since it needs config + profiles
+	var r runner.Runner
+	var dbtCleanup func()
+	isDBT := ti.Runner == "dbt"
+
+	if isDBT {
+		if cfg.DAG.DBT == nil {
+			run.mu.Lock()
+			ti.Status = StatusFailed
+			ti.Error = fmt.Errorf("dbt runner requires [dag.dbt] configuration section")
+			ti.EndedAt = time.Now()
+			run.mu.Unlock()
+			return
+		}
+
+		profilesInput := &runner.DBTProfilesInput{
+			DAGName: run.DAGName,
+			Profile: cfg.DAG.DBT.Profile,
+			Target:  cfg.DAG.DBT.Target,
+		}
+
+		var profilesDir string
+		var err error
+		if run.SecretsResolver != nil {
+			profilesDir, dbtCleanup, err = runner.GenerateProfiles(profilesInput, run.SecretsResolver)
+			if err != nil {
+				run.mu.Lock()
+				ti.Status = StatusFailed
+				ti.Error = fmt.Errorf("generating dbt profiles: %w", err)
+				ti.EndedAt = time.Now()
+				run.mu.Unlock()
+				return
+			}
+		} else {
+			dbtCleanup = func() {}
+		}
+
+		r = runner.NewDBTRunner(cfg.DAG.DBT, profilesDir)
+	} else {
+		var err error
+		r, err = runner.Resolve(ti.Runner, scriptPath)
+		if err != nil {
+			run.mu.Lock()
+			ti.Status = StatusFailed
+			ti.Error = err
+			ti.EndedAt = time.Now()
+			run.mu.Unlock()
+			return
+		}
+	}
+
+	if dbtCleanup != nil {
+		defer dbtCleanup()
 	}
 
 	logPath := filepath.Join(run.LogDir, ti.Name+".log")
@@ -320,10 +376,9 @@ func executeTask(ctx context.Context, ti *TaskInstance, run *Run, cfg *config.Pr
 		"PIT_RUN_ID="+run.ID,
 		"PIT_TASK_NAME="+ti.Name,
 		"PIT_DAG_NAME="+run.DAGName,
+		"PIT_SOCKET="+run.SocketPath,
+		"PIT_DATA_DIR="+run.DataDir,
 	)
-	if run.SocketPath != "" {
-		env = append(env, "PIT_SOCKET="+run.SocketPath)
-	}
 
 	rc := runner.RunContext{
 		ScriptPath:      scriptPath,
@@ -335,14 +390,23 @@ func executeTask(ctx context.Context, ti *TaskInstance, run *Run, cfg *config.Pr
 		SQLConnection:   cfg.DAG.SQL.Connection,
 	}
 
-	// Validate script path is within snapshot
-	if err := rc.ValidateScript(); err != nil {
-		run.mu.Lock()
-		ti.Status = StatusFailed
-		ti.Error = err
-		ti.EndedAt = time.Now()
-		run.mu.Unlock()
-		return
+	// For dbt tasks, ScriptPath holds the dbt command (not a file path),
+	// and SnapshotDir points to the dbt project within the snapshot.
+	if isDBT {
+		rc.ScriptPath = ti.Script // raw dbt command string, e.g. "run --select staging"
+		if cfg.DAG.DBT.ProjectDir != "" {
+			rc.SnapshotDir = filepath.Join(run.SnapshotDir, cfg.DAG.DBT.ProjectDir)
+		}
+	} else {
+		// Validate script path is within snapshot (not applicable for dbt)
+		if err := rc.ValidateScript(); err != nil {
+			run.mu.Lock()
+			ti.Status = StatusFailed
+			ti.Error = err
+			ti.EndedAt = time.Now()
+			run.mu.Unlock()
+			return
+		}
 	}
 
 	maxAttempts := ti.MaxRetries + 1
@@ -437,6 +501,69 @@ func printSummary(w io.Writer, run *Run) {
 		fmt.Fprintln(w, line)
 	}
 	fmt.Fprintln(w)
+}
+
+// makeLoadDataHandler returns a HandlerFunc that loads Parquet files into databases.
+func makeLoadDataHandler(store *secrets.Store, dagName string, dataDir string) sdk.HandlerFunc {
+	return func(ctx context.Context, params map[string]string) (string, error) {
+		fileName := params["file"]
+		table := params["table"]
+		connKey := params["connection"]
+
+		if fileName == "" {
+			return "", fmt.Errorf("missing required parameter: file")
+		}
+		if table == "" {
+			return "", fmt.Errorf("missing required parameter: table")
+		}
+		if connKey == "" {
+			return "", fmt.Errorf("missing required parameter: connection")
+		}
+		if store == nil {
+			return "", fmt.Errorf("secrets store not configured (use --secrets flag)")
+		}
+
+		schema := params["schema"]
+		if schema == "" {
+			schema = "dbo"
+		}
+		mode := params["mode"]
+		if mode == "" {
+			mode = "append"
+		}
+
+		// Resolve file path within data directory (prevent traversal)
+		filePath := filepath.Join(dataDir, fileName)
+		absFile, err := filepath.Abs(filePath)
+		if err != nil {
+			return "", fmt.Errorf("resolving file path: %w", err)
+		}
+		absData, err := filepath.Abs(dataDir)
+		if err != nil {
+			return "", fmt.Errorf("resolving data dir: %w", err)
+		}
+		if !strings.HasPrefix(absFile, absData+string(filepath.Separator)) && absFile != absData {
+			return "", fmt.Errorf("file path %q escapes data directory", fileName)
+		}
+
+		connStr, err := store.Resolve(dagName, connKey)
+		if err != nil {
+			return "", fmt.Errorf("resolving connection %q: %w", connKey, err)
+		}
+
+		rows, err := loader.Load(ctx, loader.LoadParams{
+			FilePath: absFile,
+			Table:    table,
+			Schema:   schema,
+			Mode:     loader.LoadMode(mode),
+			ConnStr:  connStr,
+		})
+		if err != nil {
+			return "", fmt.Errorf("loading data: %w", err)
+		}
+
+		return fmt.Sprintf("%d rows loaded", rows), nil
+	}
 }
 
 // prefixWriter is an io.Writer that prepends a prefix to each line of output.

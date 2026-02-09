@@ -13,14 +13,14 @@ func newInitCmd() *cobra.Command {
 	cmd := &cobra.Command{
 		Use:   "init <name>",
 		Short: "Scaffold a new pipeline project",
-		Long:  "Create a new project directory with pit.toml and sample tasks.\nUse --type to choose the project type: python (default), sql, or shell.",
+		Long:  "Create a new project directory with pit.toml and sample tasks.\nUse --type to choose the project type: python (default), sql, shell, or dbt.",
 		Args:  cobra.ExactArgs(1),
 		RunE: func(cmd *cobra.Command, args []string) error {
 			name := args[0]
 			pt := scaffold.ProjectType(projectType)
 
 			if !scaffold.ValidType(projectType) {
-				return fmt.Errorf("unknown project type %q (must be python, sql, or shell)", projectType)
+				return fmt.Errorf("unknown project type %q (must be python, sql, shell, or dbt)", projectType)
 			}
 
 			if err := scaffold.Create(projectDir, name, pt); err != nil {
@@ -36,7 +36,7 @@ func newInitCmd() *cobra.Command {
 		},
 	}
 
-	cmd.Flags().StringVar(&projectType, "type", "python", "project type: python, sql, or shell")
+	cmd.Flags().StringVar(&projectType, "type", "python", "project type: python, sql, shell, or dbt")
 
 	return cmd
 }

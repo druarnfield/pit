@@ -81,8 +81,10 @@ func Resolve(taskRunner string, scriptPath string) (Runner, error) {
 			return shellRunner, nil
 		case "sql":
 			return sqlRunner, nil
+		case "dbt":
+			return nil, fmt.Errorf("dbt runner is created by the executor — not available via Resolve()")
 		default:
-			return nil, fmt.Errorf("unknown runner %q (use python, bash, sql, or $ <command>)", taskRunner)
+			return nil, fmt.Errorf("unknown runner %q (use python, bash, sql, dbt, or $ <command>)", taskRunner)
 		}
 	}
 

@@ -16,12 +16,13 @@ const (
 	TypePython ProjectType = "python"
 	TypeSQL    ProjectType = "sql"
 	TypeShell  ProjectType = "shell"
+	TypeDBT    ProjectType = "dbt"
 )
 
 // ValidType returns true if the given type string is supported.
 func ValidType(t string) bool {
 	switch ProjectType(t) {
-	case TypePython, TypeSQL, TypeShell:
+	case TypePython, TypeSQL, TypeShell, TypeDBT:
 		return true
 	}
 	return false
@@ -45,6 +46,8 @@ func Create(rootDir, name string, projectType ProjectType) error {
 		return createSQL(projectDir, name)
 	case TypeShell:
 		return createShell(projectDir, name)
+	case TypeDBT:
+		return createDBT(projectDir, name)
 	default:
 		return fmt.Errorf("unknown project type %q", projectType)
 	}
@@ -216,5 +219,59 @@ func helloSh(name string) string {
 set -euo pipefail
 
 echo "Hello from %s!"
+`, name, name)
+}
+
+func createDBT(projectDir, name string) error {
+	dirs := []string{
+		projectDir,
+		filepath.Join(projectDir, "dbt_repo"),
+	}
+	if err := mkdirs(dirs); err != nil {
+		return err
+	}
+
+	files := map[string]string{
+		filepath.Join(projectDir, "pit.toml"):                    pitTomlDBT(name),
+		filepath.Join(projectDir, "dbt_repo", "dbt_project.yml"): dbtProjectYml(name),
+	}
+	return writeFiles(files)
+}
+
+func pitTomlDBT(name string) string {
+	return fmt.Sprintf(`[dag]
+name = "%s"
+schedule = "0 7 * * *"
+overlap = "skip"
+timeout = "2h"
+
+[dag.dbt]
+version = "1.9.1"
+adapter = "dbt-sqlserver"
+project_dir = "dbt_repo"
+
+[[tasks]]
+name = "run"
+script = "run"
+runner = "dbt"
+timeout = "1h"
+
+[[tasks]]
+name = "test"
+script = "test"
+runner = "dbt"
+depends_on = ["run"]
+timeout = "30m"
+`, name)
+}
+
+func dbtProjectYml(name string) string {
+	return fmt.Sprintf(`name: '%s'
+version: '1.0.0'
+
+profile: '%s'
+
+model-paths: ["models"]
+test-paths: ["tests"]
 `, name, name)
 }

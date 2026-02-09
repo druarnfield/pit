@@ -249,7 +249,7 @@ func TestSnapshot(t *testing.T) {
 	runsDir := t.TempDir()
 	srcDir := filepath.Join("testdata", "sample_project")
 
-	snapshotDir, logDir, err := Snapshot(srcDir, runsDir, "test_run_001")
+	snapshotDir, logDir, dataDir, err := Snapshot(srcDir, runsDir, "test_run_001")
 	if err != nil {
 		t.Fatalf("Snapshot() error: %v", err)
 	}
@@ -270,6 +270,16 @@ func TestSnapshot(t *testing.T) {
 	if _, err := os.Stat(logDir); err != nil {
 		t.Errorf("log dir not created: %v", err)
 	}
+
+	// Check data dir was created
+	if _, err := os.Stat(dataDir); err != nil {
+		t.Errorf("data dir not created: %v", err)
+	}
+
+	// Verify data dir is under the run directory
+	if !strings.Contains(dataDir, "test_run_001") {
+		t.Errorf("dataDir = %q, want it to contain run ID", dataDir)
+	}
 }
 
 func TestSnapshot_SkipsDirs(t *testing.T) {
@@ -282,7 +292,7 @@ func TestSnapshot_SkipsDirs(t *testing.T) {
 	os.WriteFile(filepath.Join(srcDir, "pit.toml"), []byte("[dag]\nname = \"test\"\n"), 0o644)
 
 	runsDir := t.TempDir()
-	snapshotDir, _, err := Snapshot(srcDir, runsDir, "skip_test")
+	snapshotDir, _, _, err := Snapshot(srcDir, runsDir, "skip_test")
 	if err != nil {
 		t.Fatalf("Snapshot() error: %v", err)
 	}
@@ -317,6 +327,56 @@ func TestCopyFile_PreservesPermissions(t *testing.T) {
 	}
 	if info.Mode().Perm() != 0o755 {
 		t.Errorf("copied file mode = %o, want 755", info.Mode().Perm())
+	}
+}
+
+func TestCopyDirContents(t *testing.T) {
+	srcDir := t.TempDir()
+	dstDir := t.TempDir()
+
+	// Create some files in srcDir
+	os.WriteFile(filepath.Join(srcDir, "file1.csv"), []byte("data1"), 0o644)
+	os.WriteFile(filepath.Join(srcDir, "file2.csv"), []byte("data2"), 0o644)
+	os.MkdirAll(filepath.Join(srcDir, "subdir"), 0o755)
+	os.WriteFile(filepath.Join(srcDir, "subdir", "nested.txt"), []byte("nested"), 0o644)
+
+	if err := copyDirContents(srcDir, dstDir); err != nil {
+		t.Fatalf("copyDirContents() error: %v", err)
+	}
+
+	// Check files were copied
+	for _, name := range []string{"file1.csv", "file2.csv"} {
+		data, err := os.ReadFile(filepath.Join(dstDir, name))
+		if err != nil {
+			t.Errorf("missing %s: %v", name, err)
+			continue
+		}
+		if name == "file1.csv" && string(data) != "data1" {
+			t.Errorf("%s content = %q, want %q", name, data, "data1")
+		}
+	}
+
+	// Check nested file
+	data, err := os.ReadFile(filepath.Join(dstDir, "subdir", "nested.txt"))
+	if err != nil {
+		t.Fatalf("missing subdir/nested.txt: %v", err)
+	}
+	if string(data) != "nested" {
+		t.Errorf("nested.txt content = %q, want %q", data, "nested")
+	}
+}
+
+func TestCopyDirContents_EmptySource(t *testing.T) {
+	srcDir := t.TempDir()
+	dstDir := t.TempDir()
+
+	if err := copyDirContents(srcDir, dstDir); err != nil {
+		t.Fatalf("copyDirContents() error: %v", err)
+	}
+
+	entries, _ := os.ReadDir(dstDir)
+	if len(entries) != 0 {
+		t.Errorf("dstDir has %d entries, want 0", len(entries))
 	}
 }
 

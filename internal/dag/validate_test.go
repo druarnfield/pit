@@ -1,6 +1,7 @@
 package dag
 
 import (
+	"os"
 	"strings"
 	"testing"
 
@@ -161,6 +162,253 @@ func TestValidationError_Error(t *testing.T) {
 			t.Errorf("Error() = %q, should not contain 'task' when Task is empty", got)
 		}
 	})
+}
+
+func TestValidate_ValidCronSchedule(t *testing.T) {
+	cfg := &config.ProjectConfig{
+		DAG: config.DAGConfig{
+			Name:     "test",
+			Schedule: "0 6 * * *",
+		},
+		Tasks: []config.TaskConfig{
+			{Name: "a", Script: ""},
+		},
+	}
+	errs := Validate(cfg, t.TempDir())
+	for _, e := range errs {
+		if strings.Contains(e.Error(), "schedule") {
+			t.Errorf("Validate() unexpected schedule error: %s", e)
+		}
+	}
+}
+
+func TestValidate_InvalidCronSchedule(t *testing.T) {
+	cfg := &config.ProjectConfig{
+		DAG: config.DAGConfig{
+			Name:     "test",
+			Schedule: "not a cron expression",
+		},
+	}
+	errs := Validate(cfg, t.TempDir())
+	found := false
+	for _, e := range errs {
+		if strings.Contains(e.Error(), "invalid schedule") {
+			found = true
+			break
+		}
+	}
+	if !found {
+		t.Error("Validate() expected 'invalid schedule' error, got none")
+	}
+}
+
+func TestValidate_FTPWatch_MissingFields(t *testing.T) {
+	cfg := &config.ProjectConfig{
+		DAG: config.DAGConfig{
+			Name: "test",
+			FTPWatch: &config.FTPWatchConfig{
+				// All required fields empty
+			},
+		},
+	}
+	errs := Validate(cfg, t.TempDir())
+
+	requiredFields := []string{
+		"ftp_watch.host",
+		"ftp_watch.user",
+		"ftp_watch.password_secret",
+		"ftp_watch.directory",
+		"ftp_watch.pattern",
+	}
+	for _, field := range requiredFields {
+		found := false
+		for _, e := range errs {
+			if strings.Contains(e.Error(), field) {
+				found = true
+				break
+			}
+		}
+		if !found {
+			t.Errorf("Validate() missing error for %s", field)
+		}
+	}
+}
+
+func TestValidate_FTPWatch_Defaults(t *testing.T) {
+	fw := &config.FTPWatchConfig{
+		Host:           "ftp.example.com",
+		User:           "user",
+		PasswordSecret: "pass",
+		Directory:      "/data",
+		Pattern:        "*.csv",
+	}
+	cfg := &config.ProjectConfig{
+		DAG: config.DAGConfig{
+			Name:     "test",
+			FTPWatch: fw,
+		},
+	}
+	Validate(cfg, t.TempDir())
+
+	if fw.Port != 21 {
+		t.Errorf("FTPWatch.Port = %d, want 21 (default)", fw.Port)
+	}
+	if fw.StableSeconds != 30 {
+		t.Errorf("FTPWatch.StableSeconds = %d, want 30 (default)", fw.StableSeconds)
+	}
+	if fw.PollInterval.Duration == 0 {
+		t.Error("FTPWatch.PollInterval should be defaulted, got 0")
+	}
+}
+
+func TestValidate_FTPWatch_ValidComplete(t *testing.T) {
+	cfg := &config.ProjectConfig{
+		DAG: config.DAGConfig{
+			Name: "test",
+			FTPWatch: &config.FTPWatchConfig{
+				Host:           "ftp.example.com",
+				Port:           2121,
+				User:           "user",
+				PasswordSecret: "ftp_pass",
+				Directory:      "/incoming",
+				Pattern:        "data_*.csv",
+				StableSeconds:  60,
+			},
+		},
+		Tasks: []config.TaskConfig{
+			{Name: "process"},
+		},
+	}
+	errs := Validate(cfg, t.TempDir())
+	for _, e := range errs {
+		if strings.Contains(e.Error(), "ftp_watch") {
+			t.Errorf("Validate() unexpected ftp_watch error: %s", e)
+		}
+	}
+}
+
+func TestValidate_ValidDBT(t *testing.T) {
+	cfg := loadTestdata(t, "valid_dbt")
+	errs := Validate(cfg, cfg.Dir())
+	if len(errs) != 0 {
+		t.Errorf("Validate() returned %d errors, want 0:", len(errs))
+		for _, e := range errs {
+			t.Errorf("  %s", e)
+		}
+	}
+}
+
+func TestValidate_DBT_MissingFields(t *testing.T) {
+	cfg := &config.ProjectConfig{
+		DAG: config.DAGConfig{
+			Name: "test",
+			DBT: &config.DBTConfig{
+				// All required fields empty
+			},
+		},
+	}
+	errs := Validate(cfg, t.TempDir())
+
+	requiredFields := []string{
+		"dbt.version",
+		"dbt.adapter",
+		"dbt.project_dir",
+	}
+	for _, field := range requiredFields {
+		found := false
+		for _, e := range errs {
+			if strings.Contains(e.Error(), field) {
+				found = true
+				break
+			}
+		}
+		if !found {
+			t.Errorf("Validate() missing error for %s", field)
+		}
+	}
+}
+
+func TestValidate_DBT_ProjectDirNotExists(t *testing.T) {
+	cfg := &config.ProjectConfig{
+		DAG: config.DAGConfig{
+			Name: "test",
+			DBT: &config.DBTConfig{
+				Version:    "1.9.1",
+				Adapter:    "dbt-sqlserver",
+				ProjectDir: "nonexistent_dir",
+			},
+		},
+	}
+	errs := Validate(cfg, t.TempDir())
+
+	found := false
+	for _, e := range errs {
+		if strings.Contains(e.Error(), "not found") {
+			found = true
+			break
+		}
+	}
+	if !found {
+		t.Errorf("Validate() expected error for missing project_dir, got: %v", errs)
+	}
+}
+
+func TestValidate_DBT_TaskEmptyScript(t *testing.T) {
+	tmpDir := t.TempDir()
+	// Create the dbt project dir
+	os.MkdirAll(tmpDir+"/dbt_repo", 0o755)
+
+	cfg := &config.ProjectConfig{
+		DAG: config.DAGConfig{
+			Name: "test",
+			DBT: &config.DBTConfig{
+				Version:    "1.9.1",
+				Adapter:    "dbt-sqlserver",
+				ProjectDir: "dbt_repo",
+			},
+		},
+		Tasks: []config.TaskConfig{
+			{Name: "empty_dbt_task", Script: "", Runner: "dbt"},
+		},
+	}
+	errs := Validate(cfg, tmpDir)
+
+	found := false
+	for _, e := range errs {
+		if strings.Contains(e.Error(), "non-empty script") {
+			found = true
+			break
+		}
+	}
+	if !found {
+		t.Errorf("Validate() expected error for empty dbt script, got: %v", errs)
+	}
+}
+
+func TestValidate_DBT_TaskWithScript(t *testing.T) {
+	tmpDir := t.TempDir()
+	os.MkdirAll(tmpDir+"/dbt_repo", 0o755)
+
+	cfg := &config.ProjectConfig{
+		DAG: config.DAGConfig{
+			Name: "test",
+			DBT: &config.DBTConfig{
+				Version:    "1.9.1",
+				Adapter:    "dbt-sqlserver",
+				ProjectDir: "dbt_repo",
+			},
+		},
+		Tasks: []config.TaskConfig{
+			{Name: "run_staging", Script: "run --select staging", Runner: "dbt"},
+		},
+	}
+	errs := Validate(cfg, tmpDir)
+
+	for _, e := range errs {
+		if strings.Contains(e.Error(), "dbt") && strings.Contains(e.Error(), "script") {
+			t.Errorf("Validate() unexpected dbt script error: %s", e)
+		}
+	}
 }
 
 // loadTestdata loads a ProjectConfig from testdata/<name>/pit.toml.

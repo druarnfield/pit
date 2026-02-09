@@ -18,24 +18,30 @@ var skipDirs = map[string]bool{
 }
 
 // Snapshot copies the project directory into the run snapshot directory
-// and creates the logs directory. Returns the snapshot and log directory paths.
-func Snapshot(projectDir, runsDir, runID string) (snapshotDir, logDir string, err error) {
+// and creates the logs and data directories. Returns the snapshot, log,
+// and data directory paths.
+func Snapshot(projectDir, runsDir, runID string) (snapshotDir, logDir, dataDir string, err error) {
 	absRunsDir, err := filepath.Abs(runsDir)
 	if err != nil {
-		return "", "", fmt.Errorf("resolving runs dir: %w", err)
+		return "", "", "", fmt.Errorf("resolving runs dir: %w", err)
 	}
 	snapshotDir = filepath.Join(absRunsDir, runID, "project")
 	logDir = filepath.Join(absRunsDir, runID, "logs")
+	dataDir = filepath.Join(absRunsDir, runID, "data")
 
 	if err := os.MkdirAll(logDir, 0o755); err != nil {
-		return "", "", fmt.Errorf("creating log dir: %w", err)
+		return "", "", "", fmt.Errorf("creating log dir: %w", err)
+	}
+
+	if err := os.MkdirAll(dataDir, 0o755); err != nil {
+		return "", "", "", fmt.Errorf("creating data dir: %w", err)
 	}
 
 	if err := copyDir(projectDir, snapshotDir); err != nil {
-		return "", "", fmt.Errorf("copying project to snapshot: %w", err)
+		return "", "", "", fmt.Errorf("copying project to snapshot: %w", err)
 	}
 
-	return snapshotDir, logDir, nil
+	return snapshotDir, logDir, dataDir, nil
 }
 
 // copyDir recursively copies src to dst, skipping directories in skipDirs
@@ -79,6 +85,29 @@ func copyDir(src, dst string) error {
 
 		return copyFile(path, target)
 	})
+}
+
+// copyDirContents copies all files from src into dst without creating
+// the src directory itself. dst must already exist.
+func copyDirContents(src, dst string) error {
+	entries, err := os.ReadDir(src)
+	if err != nil {
+		return fmt.Errorf("reading %q: %w", src, err)
+	}
+	for _, entry := range entries {
+		srcPath := filepath.Join(src, entry.Name())
+		dstPath := filepath.Join(dst, entry.Name())
+		if entry.IsDir() {
+			if err := copyDir(srcPath, dstPath); err != nil {
+				return err
+			}
+		} else {
+			if err := copyFile(srcPath, dstPath); err != nil {
+				return err
+			}
+		}
+	}
+	return nil
 }
 
 // copyFile copies a single file from src to dst, preserving permissions.

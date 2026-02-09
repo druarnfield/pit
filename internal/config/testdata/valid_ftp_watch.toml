@@ -1,0 +1,20 @@
+[dag]
+name = "ftp_ingest"
+schedule = "0 6 * * *"
+overlap = "skip"
+
+[dag.ftp_watch]
+host = "ftp.example.com"
+port = 2121
+user = "data_user"
+password_secret = "ftp_password"
+tls = true
+directory = "/incoming/sales"
+pattern = "sales_*.csv"
+archive_dir = "/archive/sales"
+poll_interval = "1m"
+stable_seconds = 60
+
+[[tasks]]
+name = "process"
+script = "tasks/process.py"

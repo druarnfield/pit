@@ -43,12 +43,38 @@ func (p *ProjectConfig) Dir() string {
 
 // DAGConfig holds the DAG-level settings.
 type DAGConfig struct {
-	Name     string    `toml:"name"`
-	Schedule string    `toml:"schedule"`
-	Overlap  string    `toml:"overlap"`
-	Timeout  Duration  `toml:"timeout"`
-	Requires []string  `toml:"requires"`
-	SQL      SQLConfig `toml:"sql"`
+	Name     string          `toml:"name"`
+	Schedule string          `toml:"schedule"`
+	Overlap  string          `toml:"overlap"`
+	Timeout  Duration        `toml:"timeout"`
+	Requires []string        `toml:"requires"`
+	SQL      SQLConfig       `toml:"sql"`
+	FTPWatch *FTPWatchConfig `toml:"ftp_watch"`
+	DBT      *DBTConfig      `toml:"dbt"`
+}
+
+// DBTConfig holds the dbt project configuration for a DAG.
+type DBTConfig struct {
+	Version    string   `toml:"version"`     // dbt-core version, e.g. "1.9.1"
+	Adapter    string   `toml:"adapter"`     // pip name, e.g. "dbt-sqlserver"
+	ExtraDeps  []string `toml:"extra_deps"`  // additional pip packages
+	ProjectDir string   `toml:"project_dir"` // relative path to dbt project root
+	Profile    string   `toml:"profile"`     // profile name (default: dag name)
+	Target     string   `toml:"target"`      // target name (default: "prod")
+}
+
+// FTPWatchConfig defines an FTP file watch trigger for a DAG.
+type FTPWatchConfig struct {
+	Host           string   `toml:"host"`
+	Port           int      `toml:"port"`
+	User           string   `toml:"user"`
+	PasswordSecret string   `toml:"password_secret"`
+	TLS            bool     `toml:"tls"`
+	Directory      string   `toml:"directory"`
+	Pattern        string   `toml:"pattern"`
+	ArchiveDir     string   `toml:"archive_dir"`
+	PollInterval   Duration `toml:"poll_interval"`
+	StableSeconds  int      `toml:"stable_seconds"`
 }
 
 // SQLConfig holds the default SQL connection for a project's .sql tasks.

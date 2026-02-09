@@ -237,3 +237,80 @@ func TestAddr(t *testing.T) {
 		}
 	}
 }
+
+func TestRegisterHandler(t *testing.T) {
+	sockPath := filepath.Join(t.TempDir(), "test.sock")
+	srv, err := NewServer(sockPath, nil, "test")
+	if err != nil {
+		t.Fatalf("NewServer() unexpected error: %v", err)
+	}
+
+	srv.RegisterHandler("echo", func(_ context.Context, params map[string]string) (string, error) {
+		return params["msg"], nil
+	})
+
+	ctx, cancel := context.WithCancel(context.Background())
+	go srv.Serve(ctx)
+
+	// Wait for server
+	network := testNetwork()
+	addr := srv.Addr()
+	for i := 0; i < 50; i++ {
+		conn, err := net.Dial(network, addr)
+		if err == nil {
+			conn.Close()
+			break
+		}
+		time.Sleep(10 * time.Millisecond)
+	}
+	t.Cleanup(func() {
+		cancel()
+		srv.Shutdown()
+	})
+
+	resp := sendRequest(t, addr, Request{
+		Method: "echo",
+		Params: map[string]string{"msg": "hello"},
+	})
+	if resp.Error != "" {
+		t.Fatalf("echo returned error: %s", resp.Error)
+	}
+	if resp.Result != "hello" {
+		t.Errorf("echo result = %q, want %q", resp.Result, "hello")
+	}
+}
+
+func TestNewServer_NilStore(t *testing.T) {
+	sockPath := filepath.Join(t.TempDir(), "test.sock")
+	srv, err := NewServer(sockPath, nil, "test")
+	if err != nil {
+		t.Fatalf("NewServer(nil store) unexpected error: %v", err)
+	}
+	defer srv.Shutdown()
+
+	// get_secret should not be registered when store is nil
+	ctx, cancel := context.WithCancel(context.Background())
+	go srv.Serve(ctx)
+
+	network := testNetwork()
+	addr := srv.Addr()
+	for i := 0; i < 50; i++ {
+		conn, err := net.Dial(network, addr)
+		if err == nil {
+			conn.Close()
+			break
+		}
+		time.Sleep(10 * time.Millisecond)
+	}
+	t.Cleanup(func() {
+		cancel()
+	})
+
+	resp := sendRequest(t, addr, Request{
+		Method: "get_secret",
+		Params: map[string]string{"key": "x"},
+	})
+	if !strings.Contains(resp.Error, "unknown method") {
+		t.Errorf("expected 'unknown method' error, got %q", resp.Error)
+	}
+}

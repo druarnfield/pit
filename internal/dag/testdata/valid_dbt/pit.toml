@@ -1,0 +1,20 @@
+[dag]
+name = "dbt_project"
+schedule = "0 7 * * *"
+overlap = "skip"
+
+[dag.dbt]
+version = "1.9.1"
+adapter = "dbt-sqlserver"
+project_dir = "dbt_repo"
+
+[[tasks]]
+name = "staging"
+script = "run --select staging"
+runner = "dbt"
+
+[[tasks]]
+name = "marts"
+script = "run --select marts"
+runner = "dbt"
+depends_on = ["staging"]

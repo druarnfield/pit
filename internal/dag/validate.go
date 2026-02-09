@@ -6,6 +6,7 @@ import (
 	"path/filepath"
 
 	"github.com/druarnfield/pit/internal/config"
+	"github.com/robfig/cron/v3"
 )
 
 // ValidationError represents a single validation problem.
@@ -76,7 +77,16 @@ func Validate(cfg *config.ProjectConfig, projectDir string) []*ValidationError {
 				})
 			}
 		}
-		if t.Script != "" {
+		if t.Runner == "dbt" {
+			// dbt tasks: script is a dbt command, not a file path
+			if t.Script == "" {
+				errs = append(errs, &ValidationError{
+					DAG:     dagName,
+					Task:    t.Name,
+					Message: "dbt task requires a non-empty script (dbt command, e.g. \"run --select staging\")",
+				})
+			}
+		} else if t.Script != "" {
 			scriptPath := filepath.Join(projectDir, t.Script)
 			if _, err := os.Stat(scriptPath); os.IsNotExist(err) {
 				errs = append(errs, &ValidationError{
@@ -88,9 +98,94 @@ func Validate(cfg *config.ProjectConfig, projectDir string) []*ValidationError {
 		}
 	}
 
+	// Validate schedule as cron expression
+	if cfg.DAG.Schedule != "" {
+		if _, err := cron.ParseStandard(cfg.DAG.Schedule); err != nil {
+			errs = append(errs, &ValidationError{
+				DAG:     dagName,
+				Message: fmt.Sprintf("invalid schedule %q: %s", cfg.DAG.Schedule, err),
+			})
+		}
+	}
+
+	// Validate FTP watch config
+	if cfg.DAG.FTPWatch != nil {
+		errs = append(errs, validateFTPWatch(cfg.DAG.FTPWatch, dagName)...)
+	}
+
+	// Validate dbt config
+	if cfg.DAG.DBT != nil {
+		errs = append(errs, validateDBT(cfg.DAG.DBT, dagName, projectDir)...)
+	}
+
 	// Cycle detection via Kahn's algorithm
 	if cycleErrs := detectCycles(cfg, dagName); len(cycleErrs) > 0 {
 		errs = append(errs, cycleErrs...)
+	}
+
+	return errs
+}
+
+// validateFTPWatch checks required fields and applies defaults for FTP watch config.
+func validateFTPWatch(fw *config.FTPWatchConfig, dagName string) []*ValidationError {
+	var errs []*ValidationError
+
+	if fw.Host == "" {
+		errs = append(errs, &ValidationError{DAG: dagName, Message: "ftp_watch.host is required"})
+	}
+	if fw.User == "" {
+		errs = append(errs, &ValidationError{DAG: dagName, Message: "ftp_watch.user is required"})
+	}
+	if fw.PasswordSecret == "" {
+		errs = append(errs, &ValidationError{DAG: dagName, Message: "ftp_watch.password_secret is required"})
+	}
+	if fw.Directory == "" {
+		errs = append(errs, &ValidationError{DAG: dagName, Message: "ftp_watch.directory is required"})
+	}
+	if fw.Pattern == "" {
+		errs = append(errs, &ValidationError{DAG: dagName, Message: "ftp_watch.pattern is required"})
+	}
+
+	// Apply defaults
+	if fw.Port == 0 {
+		fw.Port = 21
+	}
+	if fw.PollInterval.Duration == 0 {
+		fw.PollInterval.Duration = 30 * 1e9 // 30s in nanoseconds
+	}
+	if fw.StableSeconds == 0 {
+		fw.StableSeconds = 30
+	}
+
+	return errs
+}
+
+// validateDBT checks required fields for dbt config.
+func validateDBT(dbt *config.DBTConfig, dagName string, projectDir string) []*ValidationError {
+	var errs []*ValidationError
+
+	if dbt.Version == "" {
+		errs = append(errs, &ValidationError{DAG: dagName, Message: "dbt.version is required"})
+	}
+	if dbt.Adapter == "" {
+		errs = append(errs, &ValidationError{DAG: dagName, Message: "dbt.adapter is required"})
+	}
+	if dbt.ProjectDir == "" {
+		errs = append(errs, &ValidationError{DAG: dagName, Message: "dbt.project_dir is required"})
+	} else {
+		dbtDir := filepath.Join(projectDir, dbt.ProjectDir)
+		info, err := os.Stat(dbtDir)
+		if err != nil {
+			errs = append(errs, &ValidationError{
+				DAG:     dagName,
+				Message: fmt.Sprintf("dbt.project_dir %q not found", dbt.ProjectDir),
+			})
+		} else if !info.IsDir() {
+			errs = append(errs, &ValidationError{
+				DAG:     dagName,
+				Message: fmt.Sprintf("dbt.project_dir %q is not a directory", dbt.ProjectDir),
+			})
+		}
 	}
 
 	return errs

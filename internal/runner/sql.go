@@ -9,7 +9,6 @@ import (
 	"strings"
 	"time"
 
-	_ "github.com/duckdb/duckdb-go/v2" // register "duckdb" driver
 	_ "github.com/microsoft/go-mssqldb" // register "mssql" driver
 )
 
@@ -82,18 +81,13 @@ func (r *SQLRunner) runStub(ctx context.Context, rc RunContext, logFile io.Write
 }
 
 // DetectDriver determines the database/sql driver name from a connection string.
-// Returns "mssql" for sqlserver:// or mssql:// URIs, "duckdb" for duckdb:// URIs
-// or file paths ending in .db or .duckdb.
+// Returns "mssql" for sqlserver:// or mssql:// URIs.
 func DetectDriver(connStr string) (string, error) {
 	lower := strings.ToLower(connStr)
 	switch {
 	case strings.HasPrefix(lower, "sqlserver://"), strings.HasPrefix(lower, "mssql://"):
 		return "mssql", nil
-	case strings.HasPrefix(lower, "duckdb://"):
-		return "duckdb", nil
-	case strings.HasSuffix(lower, ".db"), strings.HasSuffix(lower, ".duckdb"):
-		return "duckdb", nil
 	default:
-		return "", fmt.Errorf("cannot detect SQL driver from connection string (expected sqlserver://, mssql://, duckdb://, or a .db/.duckdb file path)")
+		return "", fmt.Errorf("cannot detect SQL driver from connection string (expected sqlserver:// or mssql://)")
 	}
 }

@@ -17,8 +17,10 @@ Thumbs.db
 /runs/
 
 # Test artifacts
-/projects/test_*/
+/projects/**/
 
 # Secrets
 secrets.toml
 .secrets
+# virtual environments
+.venv

@@ -79,7 +79,7 @@ func createSQL(projectDir, name string) error {
 	}
 
 	files := map[string]string{
-		filepath.Join(projectDir, "pit.toml"):            pitTomlSQL(name),
+		filepath.Join(projectDir, "pit.toml"):             pitTomlSQL(name),
 		filepath.Join(projectDir, "tasks", "example.sql"): exampleSQL(name),
 	}
 	return writeFiles(files)
@@ -95,8 +95,8 @@ func createShell(projectDir, name string) error {
 	}
 
 	files := map[string]string{
-		filepath.Join(projectDir, "pit.toml"):           pitTomlShell(name),
-		filepath.Join(projectDir, "tasks", "hello.sh"):  helloSh(name),
+		filepath.Join(projectDir, "pit.toml"):          pitTomlShell(name),
+		filepath.Join(projectDir, "tasks", "hello.sh"): helloSh(name),
 	}
 	return writeFiles(files)
 }
@@ -182,15 +182,15 @@ dependencies = ["pit-sdk"]
 pit-sdk = { git = "https://github.com/druarnfield/pit", subdirectory = "sdk/python" }
 
 [build-system]
-requires = ["hatchling"]
-build-backend = "hatchling.build"
+requires = ["uv_build>=0.10.0,<0.11.0"]
+build-backend = "uv_build"
 `, name)
 }
 
 func helloPy(name string) string {
 	return fmt.Sprintf(`"""Sample task for %s."""
 
-from pit.sdk import get_secret
+from pit_sdk.secrets import get_secret
 
 
 def main():

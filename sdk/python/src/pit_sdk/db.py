@@ -58,11 +58,12 @@ def output_sql(
     query: str,
     name: str,
 ) -> str:
-    """Execute a SQL query and write results directly to Parquet on disk.
+    """Execute a SQL query and stream results directly to Parquet on disk.
 
-    Combines ``read_sql`` and ``write_output`` into a single step. The Arrow
-    Table is written to disk and freed immediately — it never lives in the
-    caller's scope, so Python can reclaim the memory straight away.
+    Uses ConnectorX's ``arrow_stream`` mode to read record batches one at
+    a time and write each batch to a Parquet file via ``ParquetWriter``.
+    Memory usage stays proportional to a single batch rather than the
+    full result set.
 
     Args:
         conn: Database connection string (e.g. "mssql://user:pass@host/db").
@@ -76,7 +77,9 @@ def output_sql(
     Raises:
         RuntimeError: If PIT_DATA_DIR is not set.
     """
-    table = cx.read_sql(conn, query, return_type="arrow")
+    reader = cx.read_sql(conn, query, return_type="arrow_stream")
     path = os.path.join(_data_dir(), f"{name}.parquet")
-    pq.write_table(table, path)
+    with pq.ParquetWriter(path, reader.schema) as writer:
+        for batch in reader:
+            writer.write_batch(batch)
     return path

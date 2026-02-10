@@ -309,15 +309,16 @@ Pit starts a JSON-over-socket server for every run (Unix domain socket on Linux/
 Python tasks use the bundled SDK client:
 
 ```python
-from pit_sdk import get_secret, read_sql, write_output, load_data
+from pit_sdk import get_secret, read_sql, output_sql, write_output, load_data
 
 # Read secrets
 conn_str = get_secret("claims_db")
 
-# Read from database (ConnectorX — no ODBC drivers needed)
-table = read_sql(conn_str, "SELECT * FROM staging.claims")
+# Query straight to Parquet on disk (no table held in memory)
+output_sql(conn_str, "SELECT * FROM staging.claims", "claims")
 
-# Write inter-task data
+# Or read into memory when you need to transform first
+table = read_sql(conn_str, "SELECT * FROM staging.claims")
 write_output("claims", table)
 
 # Bulk-load Parquet into database (Go-side, no ODBC)
@@ -428,6 +429,7 @@ The Python SDK (`sdk/python/`) provides helpers for tasks running under Pit:
 |----------|-------------|
 | `get_secret(key)` | Retrieve a secret from the orchestrator's secrets store |
 | `read_sql(conn, query)` | Read from a database via ConnectorX (returns Arrow Table) |
+| `output_sql(conn, query, name)` | Query straight to Parquet on disk — no table held in Python memory |
 | `write_output(name, data)` | Write Arrow/pandas/polars data to Parquet in the data directory |
 | `read_input(name)` | Read a named Parquet file from the data directory |
 | `load_data(file, table, conn)` | Trigger Go-side bulk load of Parquet into a database |

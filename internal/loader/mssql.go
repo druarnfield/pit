@@ -77,8 +77,11 @@ func joinStrings(elems []string, sep string) string {
 	return out
 }
 
-// loadMSSQL bulk-loads Arrow records into an MSSQL table.
-func loadMSSQL(ctx context.Context, params LoadParams, records []arrow.Record, schema *arrow.Schema) (int64, error) {
+// loadMSSQL streams Arrow record batches from the parquetStream into an MSSQL table.
+// Only one row group's worth of data is held in memory at a time.
+func loadMSSQL(ctx context.Context, params LoadParams, stream *parquetStream) (int64, error) {
+	schema := stream.Schema()
+
 	db, err := sql.Open("mssql", params.ConnStr)
 	if err != nil {
 		return 0, fmt.Errorf("opening mssql connection: %w", err)
@@ -130,7 +133,8 @@ func loadMSSQL(ctx context.Context, params LoadParams, records []arrow.Record, s
 	defer stmt.Close()
 
 	var totalRows int64
-	for _, rec := range records {
+	for stream.Next() {
+		rec := stream.Record()
 		numRows := int(rec.NumRows())
 		numCols := int(rec.NumCols())
 
@@ -148,6 +152,9 @@ func loadMSSQL(ctx context.Context, params LoadParams, records []arrow.Record, s
 			}
 		}
 		totalRows += int64(numRows)
+	}
+	if err := stream.Err(); err != nil {
+		return totalRows, fmt.Errorf("reading parquet: %w", err)
 	}
 
 	// Flush the bulk copy

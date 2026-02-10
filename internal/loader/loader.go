@@ -26,6 +26,7 @@ type LoadParams struct {
 }
 
 // Load reads a Parquet file and bulk-loads it into the target database.
+// Data is streamed one row group at a time to keep memory usage steady.
 // Returns the number of rows loaded.
 func Load(ctx context.Context, params LoadParams) (int64, error) {
 	if params.Schema == "" {
@@ -35,15 +36,11 @@ func Load(ctx context.Context, params LoadParams) (int64, error) {
 		params.Mode = ModeAppend
 	}
 
-	records, schema, err := readParquet(params.FilePath)
+	stream, err := openParquetStream(params.FilePath)
 	if err != nil {
 		return 0, fmt.Errorf("reading parquet file: %w", err)
 	}
-	defer func() {
-		for _, r := range records {
-			r.Release()
-		}
-	}()
+	defer stream.Close()
 
 	driver, err := runner.DetectDriver(params.ConnStr)
 	if err != nil {
@@ -52,7 +49,7 @@ func Load(ctx context.Context, params LoadParams) (int64, error) {
 
 	switch driver {
 	case "mssql":
-		return loadMSSQL(ctx, params, records, schema)
+		return loadMSSQL(ctx, params, stream)
 	default:
 		return 0, fmt.Errorf("unsupported driver %q for bulk load", driver)
 	}

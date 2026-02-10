@@ -95,7 +95,7 @@ func (ps *parquetStream) Next() bool {
 		}
 
 		// Read the next row group
-		tbl, err := ps.reader.ReadRowGroups(context.Background(), []int{ps.rgIdx}, ps.colIndices)
+		tbl, err := ps.reader.ReadRowGroups(context.Background(), ps.colIndices, []int{ps.rgIdx})
 		if err != nil {
 			ps.err = fmt.Errorf("reading row group %d: %w", ps.rgIdx, err)
 			return false

@@ -15,10 +15,11 @@ import (
 // parquetStream provides streaming access to a Parquet file's record batches.
 // Only one row group's worth of data is held in memory at a time.
 type parquetStream struct {
-	file   *os.File
-	pf     *file.Reader
-	reader *pqarrow.FileReader
-	schema *arrow.Schema
+	file       *os.File
+	pf         *file.Reader
+	reader     *pqarrow.FileReader
+	schema     *arrow.Schema
+	colIndices []int // explicit column indices (avoids nil misinterpretation)
 
 	// iteration state
 	rgIdx  int              // next row group index to read
@@ -57,7 +58,12 @@ func openParquetStream(filePath string) (*parquetStream, error) {
 		return nil, fmt.Errorf("reading schema: %w", err)
 	}
 
-	return &parquetStream{file: f, pf: pf, reader: reader, schema: schema}, nil
+	colIndices := make([]int, schema.NumFields())
+	for i := range colIndices {
+		colIndices[i] = i
+	}
+
+	return &parquetStream{file: f, pf: pf, reader: reader, schema: schema, colIndices: colIndices}, nil
 }
 
 // Schema returns the Arrow schema of the Parquet file.
@@ -89,7 +95,7 @@ func (ps *parquetStream) Next() bool {
 		}
 
 		// Read the next row group
-		tbl, err := ps.reader.ReadRowGroups(context.Background(), []int{ps.rgIdx}, nil)
+		tbl, err := ps.reader.ReadRowGroups(context.Background(), []int{ps.rgIdx}, ps.colIndices)
 		if err != nil {
 			ps.err = fmt.Errorf("reading row group %d: %w", ps.rgIdx, err)
 			return false

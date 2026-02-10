@@ -13,6 +13,7 @@ type LoadMode string
 const (
 	ModeAppend           LoadMode = "append"
 	ModeTruncateAndLoad  LoadMode = "truncate_and_load"
+	ModeCreateOrReplace  LoadMode = "create_or_replace"
 )
 
 // LoadParams configures a data load operation.

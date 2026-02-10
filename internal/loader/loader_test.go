@@ -371,3 +371,89 @@ func containsStr(s, substr string) bool {
 	}
 	return false
 }
+
+func TestArrowTypeToMSSQL(t *testing.T) {
+	tests := []struct {
+		name    string
+		dt      arrow.DataType
+		want    string
+		wantErr bool
+	}{
+		{"int8", arrow.PrimitiveTypes.Int8, "SMALLINT", false},
+		{"int16", arrow.PrimitiveTypes.Int16, "SMALLINT", false},
+		{"int32", arrow.PrimitiveTypes.Int32, "INT", false},
+		{"int64", arrow.PrimitiveTypes.Int64, "BIGINT", false},
+		{"uint8", arrow.PrimitiveTypes.Uint8, "TINYINT", false},
+		{"uint16", arrow.PrimitiveTypes.Uint16, "INT", false},
+		{"uint32", arrow.PrimitiveTypes.Uint32, "BIGINT", false},
+		{"uint64", arrow.PrimitiveTypes.Uint64, "BIGINT", false},
+		{"float32", arrow.PrimitiveTypes.Float32, "REAL", false},
+		{"float64", arrow.PrimitiveTypes.Float64, "FLOAT", false},
+		{"string", arrow.BinaryTypes.String, "NVARCHAR(MAX)", false},
+		{"bool", arrow.FixedWidthTypes.Boolean, "BIT", false},
+		{"timestamp", &arrow.TimestampType{Unit: arrow.Microsecond}, "DATETIME2", false},
+		{"date32", arrow.FixedWidthTypes.Date32, "DATE", false},
+		{"binary", arrow.BinaryTypes.Binary, "VARBINARY(MAX)", false},
+		{"unsupported_list", arrow.ListOf(arrow.PrimitiveTypes.Int32), "", true},
+	}
+
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			got, err := arrowTypeToMSSQL(tt.dt)
+			if tt.wantErr {
+				if err == nil {
+					t.Errorf("arrowTypeToMSSQL(%s) expected error, got nil", tt.dt)
+				}
+				return
+			}
+			if err != nil {
+				t.Fatalf("arrowTypeToMSSQL(%s) unexpected error: %v", tt.dt, err)
+			}
+			if got != tt.want {
+				t.Errorf("arrowTypeToMSSQL(%s) = %q, want %q", tt.dt, got, tt.want)
+			}
+		})
+	}
+}
+
+func TestCreateTableDDL(t *testing.T) {
+	schema := arrow.NewSchema([]arrow.Field{
+		{Name: "id", Type: arrow.PrimitiveTypes.Int32, Nullable: false},
+		{Name: "name", Type: arrow.BinaryTypes.String, Nullable: true},
+		{Name: "score", Type: arrow.PrimitiveTypes.Float64, Nullable: true},
+		{Name: "active", Type: arrow.FixedWidthTypes.Boolean, Nullable: false},
+	}, nil)
+
+	ddl, err := createTableDDL("dbo", "test_table", schema)
+	if err != nil {
+		t.Fatalf("createTableDDL() unexpected error: %v", err)
+	}
+
+	// Verify the DDL contains the expected fragments
+	expectations := []string{
+		"CREATE TABLE [dbo].[test_table]",
+		"[id] INT NOT NULL",
+		"[name] NVARCHAR(MAX) NULL",
+		"[score] FLOAT NULL",
+		"[active] BIT NOT NULL",
+	}
+	for _, exp := range expectations {
+		if !containsStr(ddl, exp) {
+			t.Errorf("DDL missing %q\ngot:\n%s", exp, ddl)
+		}
+	}
+}
+
+func TestCreateTableDDL_UnsupportedType(t *testing.T) {
+	schema := arrow.NewSchema([]arrow.Field{
+		{Name: "bad", Type: arrow.ListOf(arrow.PrimitiveTypes.Int32), Nullable: false},
+	}, nil)
+
+	_, err := createTableDDL("dbo", "test_table", schema)
+	if err == nil {
+		t.Error("createTableDDL() expected error for unsupported type, got nil")
+	}
+	if !containsStr(err.Error(), "column \"bad\"") {
+		t.Errorf("error = %q, want it to mention column name", err)
+	}
+}

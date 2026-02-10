@@ -432,6 +432,14 @@ The Python SDK (`sdk/python/`) provides helpers for tasks running under Pit:
 | `read_input(name)` | Read a named Parquet file from the data directory |
 | `load_data(file, table, conn)` | Trigger Go-side bulk load of Parquet into a database |
 
+The `load_data` function accepts optional `schema` (default `"dbo"`), and `mode` parameters. Supported modes:
+
+| Mode | Behaviour |
+|------|-----------|
+| `append` (default) | Insert rows into the existing table |
+| `truncate_and_load` | Truncate the table, then insert rows |
+| `create_or_replace` | Drop the table if it exists, recreate it from the Parquet schema, then insert rows |
+
 Database reads use ConnectorX (Rust-native, no ODBC drivers needed). Database writes go through the Go orchestrator's bulk loader via RPC (also no ODBC).
 
 ## Roadmap

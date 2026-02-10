@@ -94,7 +94,9 @@ def load_data(
         connection: Secret key for the connection string
                     (resolved from secrets store).
         schema: Target schema (default "dbo").
-        mode: Load mode — "append" or "truncate_and_load".
+        mode: Load mode — "append", "truncate_and_load", or
+              "create_or_replace" (drops and recreates the table
+              from the Parquet schema).
 
     Returns:
         A message from the orchestrator (e.g. "1000 rows loaded").

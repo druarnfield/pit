@@ -9,6 +9,74 @@ import (
 	mssql "github.com/microsoft/go-mssqldb"
 )
 
+// arrowTypeToMSSQL maps an Arrow data type to a MSSQL column type string.
+func arrowTypeToMSSQL(dt arrow.DataType) (string, error) {
+	switch dt.ID() {
+	case arrow.INT8:
+		return "SMALLINT", nil
+	case arrow.INT16:
+		return "SMALLINT", nil
+	case arrow.INT32:
+		return "INT", nil
+	case arrow.INT64:
+		return "BIGINT", nil
+	case arrow.UINT8:
+		return "TINYINT", nil
+	case arrow.UINT16:
+		return "INT", nil
+	case arrow.UINT32:
+		return "BIGINT", nil
+	case arrow.UINT64:
+		return "BIGINT", nil
+	case arrow.FLOAT32:
+		return "REAL", nil
+	case arrow.FLOAT64:
+		return "FLOAT", nil
+	case arrow.STRING:
+		return "NVARCHAR(MAX)", nil
+	case arrow.BOOL:
+		return "BIT", nil
+	case arrow.TIMESTAMP:
+		return "DATETIME2", nil
+	case arrow.DATE32:
+		return "DATE", nil
+	case arrow.BINARY:
+		return "VARBINARY(MAX)", nil
+	default:
+		return "", fmt.Errorf("unsupported Arrow type %s for MSSQL column", dt)
+	}
+}
+
+// createTableDDL builds a CREATE TABLE statement from an Arrow schema.
+func createTableDDL(schemaName, tableName string, schema *arrow.Schema) (string, error) {
+	var cols []string
+	for _, f := range schema.Fields() {
+		sqlType, err := arrowTypeToMSSQL(f.Type)
+		if err != nil {
+			return "", fmt.Errorf("column %q: %w", f.Name, err)
+		}
+		null := "NOT NULL"
+		if f.Nullable {
+			null = "NULL"
+		}
+		cols = append(cols, fmt.Sprintf("    [%s] %s %s", f.Name, sqlType, null))
+	}
+	ddl := fmt.Sprintf("CREATE TABLE [%s].[%s] (\n%s\n)", schemaName, tableName, joinStrings(cols, ",\n"))
+	return ddl, nil
+}
+
+// joinStrings joins a slice of strings with a separator (avoids importing strings).
+func joinStrings(elems []string, sep string) string {
+	if len(elems) == 0 {
+		return ""
+	}
+	out := elems[0]
+	for _, e := range elems[1:] {
+		out += sep + e
+	}
+	return out
+}
+
 // loadMSSQL bulk-loads Arrow records into an MSSQL table.
 func loadMSSQL(ctx context.Context, params LoadParams, records []arrow.Record, schema *arrow.Schema) (int64, error) {
 	db, err := sql.Open("mssql", params.ConnStr)
@@ -16,6 +84,21 @@ func loadMSSQL(ctx context.Context, params LoadParams, records []arrow.Record, s
 		return 0, fmt.Errorf("opening mssql connection: %w", err)
 	}
 	defer db.Close()
+
+	if params.Mode == ModeCreateOrReplace {
+		dropSQL := fmt.Sprintf("IF OBJECT_ID('[%s].[%s]', 'U') IS NOT NULL DROP TABLE [%s].[%s]",
+			params.Schema, params.Table, params.Schema, params.Table)
+		if _, err := db.ExecContext(ctx, dropSQL); err != nil {
+			return 0, fmt.Errorf("dropping table: %w", err)
+		}
+		ddl, err := createTableDDL(params.Schema, params.Table, schema)
+		if err != nil {
+			return 0, fmt.Errorf("building create table DDL: %w", err)
+		}
+		if _, err := db.ExecContext(ctx, ddl); err != nil {
+			return 0, fmt.Errorf("creating table: %w", err)
+		}
+	}
 
 	if params.Mode == ModeTruncateAndLoad {
 		truncateSQL := fmt.Sprintf("TRUNCATE TABLE [%s].[%s]", params.Schema, params.Table)

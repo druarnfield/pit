@@ -24,3 +24,6 @@ secrets.toml
 .secrets
 # virtual environments
 .venv
+
+#build artifacts
+bin

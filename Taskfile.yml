@@ -1,0 +1,76 @@
+# Taskfile.yml
+version: "3"
+
+vars:
+  APP_NAME: pit
+  APP_PATH: ./cmd/pit
+  VERSION:
+    sh: git describe --tags --always --dirty 2>/dev/null || echo "dev"
+
+tasks:
+  default:
+    cmds:
+      - task --list
+
+  # Dev builds (fast, with debug info)
+  dev:
+    desc: Dev build for current platform
+    cmds:
+      - go build -o ./bin/{{.APP_NAME}}{{exeExt}} {{.APP_PATH}}
+
+  dev:windows:
+    desc: Dev build for Windows
+    env:
+      GOOS: windows
+      GOARCH: amd64
+    cmds:
+      - go build -o ./bin/{{.APP_NAME}}.exe {{.APP_PATH}}
+
+  dev:linux:
+    desc: Dev build for Linux
+    env:
+      GOOS: linux
+      GOARCH: amd64
+    cmds:
+      - go build -o ./bin/{{.APP_NAME}} {{.APP_PATH}}
+
+  # Prod builds (optimised, stripped)
+  prod:windows:
+    desc: Production build for Windows
+    env:
+      GOOS: windows
+      GOARCH: amd64
+      CGO_ENABLED: "0"
+    cmds:
+      - >
+        go build -trimpath
+        -ldflags="-s -w -X main.version={{.VERSION}}"
+        -o ./bin/{{.APP_NAME}}.exe {{.APP_PATH}}
+
+  prod:linux:
+    desc: Production build for Linux
+    env:
+      GOOS: linux
+      GOARCH: amd64
+      CGO_ENABLED: "0"
+    cmds:
+      - >
+        go build -trimpath
+        -ldflags="-s -w -X main.version={{.VERSION}}"
+        -o ./bin/{{.APP_NAME}} {{.APP_PATH}}
+
+  prod:all:
+    desc: Production build for all platforms
+    cmds:
+      - task: prod:windows
+      - task: prod:linux
+
+  clean:
+    desc: Remove build artifacts
+    cmds:
+      - rm -rf ./bin
+
+  run:
+    desc: Build and run (dev)
+    cmds:
+      - go run {{.APP_PATH}}

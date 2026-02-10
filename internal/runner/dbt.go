@@ -33,11 +33,13 @@ func (r *DBTRunner) BuildArgs(dbtCommand string) []string {
 	for _, dep := range r.Config.ExtraDeps {
 		args = append(args, "--with", dep)
 	}
+	// TODO: add this to config
+	args = append(args, "--python", "3.10")
 
 	// dbt executable + subcommand + args + log format
 	args = append(args, "dbt")
-	args = append(args, strings.Fields(dbtCommand)...)
 	args = append(args, "--log-format", "json")
+	args = append(args, strings.Fields(dbtCommand)...)
 
 	return args
 }

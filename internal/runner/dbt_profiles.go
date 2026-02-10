@@ -16,6 +16,7 @@ var profilesTmpl = template.Must(template.New("profiles").Parse(`{{ .ProfileName
       type: sqlserver
       driver: "{{ .Driver }}"
       server: "{{ .Host }}"
+      threads: {{ .Threads }}
       port: {{ .Port }}
       database: "{{ .Database }}"
       schema: "{{ .Schema }}"
@@ -35,6 +36,7 @@ type profileData struct {
 	Schema      string
 	User        string
 	Password    string
+	Threads     string
 }
 
 // GenerateProfiles creates a temporary directory containing a profiles.yml
@@ -97,6 +99,11 @@ func GenerateProfiles(cfg *DBTProfilesInput, resolver SecretsResolver) (string, 
 		driver = config.DefaultDBTDriver
 	}
 
+	threads := cfg.Threads
+	if threads == "" {
+		threads = "4"
+	}
+
 	f, err := os.Create(tmpDir + "/profiles.yml")
 	if err != nil {
 		cleanup()
@@ -114,6 +121,7 @@ func GenerateProfiles(cfg *DBTProfilesInput, resolver SecretsResolver) (string, 
 		Schema:      schema,
 		User:        user,
 		Password:    password,
+		Threads:     threads,
 	}
 	if err := profilesTmpl.Execute(f, data); err != nil {
 		cleanup()
@@ -129,4 +137,5 @@ type DBTProfilesInput struct {
 	Profile string
 	Target  string
 	Driver  string // ODBC driver string; defaults to config.DefaultDBTDriver if empty
+	Threads string
 }

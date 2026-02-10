@@ -62,6 +62,7 @@ type DBTConfig struct {
 	ProjectDir string   `toml:"project_dir"` // relative path to dbt project root
 	Profile    string   `toml:"profile"`     // profile name (default: dag name)
 	Target     string   `toml:"target"`      // target name (default: "prod")
+	Threads    string   `toml:"threads"`     // number of threads to run with
 }
 
 // FTPWatchConfig defines an FTP file watch trigger for a DAG.

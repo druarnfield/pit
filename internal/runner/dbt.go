@@ -71,12 +71,19 @@ func (r *DBTRunner) Run(ctx context.Context, rc RunContext, logFile io.Writer) e
 	}
 	cmd.Env = env
 
-	// Pipe stdout through the JSON log parser, stderr goes direct
+	// dbt writes structured log events to stderr, not stdout.
+	// Wire both through the parser so nothing is missed.
 	parser := newDBTLogParser(logFile)
 	cmd.Stdout = parser
-	cmd.Stderr = logFile
+	cmd.Stderr = parser
 
-	if err := cmd.Run(); err != nil {
+	err := cmd.Run()
+
+	// Close the pipe so the scanner goroutine gets EOF and flushes.
+	// Must happen after cmd.Run() returns, before we check the error.
+	parser.Close()
+
+	if err != nil {
 		return fmt.Errorf("dbt runner: %w", err)
 	}
 	return nil

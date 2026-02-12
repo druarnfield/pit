@@ -174,6 +174,9 @@ func TestLoad(t *testing.T) {
 		if dbt.Target != "prod" {
 			t.Errorf("DBT.Target = %q, want %q", dbt.Target, "prod")
 		}
+		if dbt.Connection != "analytics_db" {
+			t.Errorf("DBT.Connection = %q, want %q", dbt.Connection, "analytics_db")
+		}
 
 		// Check dbt tasks
 		if len(cfg.Tasks) != 3 {
@@ -199,17 +202,11 @@ func TestLoad(t *testing.T) {
 			t.Fatal("DAG.FTPWatch is nil, want non-nil")
 		}
 		fw := cfg.DAG.FTPWatch
-		if fw.Host != "ftp.example.com" {
-			t.Errorf("FTPWatch.Host = %q, want %q", fw.Host, "ftp.example.com")
+		if fw.Secret != "ftp_creds" {
+			t.Errorf("FTPWatch.Secret = %q, want %q", fw.Secret, "ftp_creds")
 		}
 		if fw.Port != 2121 {
 			t.Errorf("FTPWatch.Port = %d, want 2121", fw.Port)
-		}
-		if fw.User != "data_user" {
-			t.Errorf("FTPWatch.User = %q, want %q", fw.User, "data_user")
-		}
-		if fw.PasswordSecret != "ftp_password" {
-			t.Errorf("FTPWatch.PasswordSecret = %q, want %q", fw.PasswordSecret, "ftp_password")
 		}
 		if !fw.TLS {
 			t.Error("FTPWatch.TLS = false, want true")

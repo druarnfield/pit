@@ -4,10 +4,8 @@ schedule = "0 6 * * *"
 overlap = "skip"
 
 [dag.ftp_watch]
-host = "ftp.example.com"
+secret = "ftp_creds"
 port = 2121
-user = "data_user"
-password_secret = "ftp_password"
 tls = true
 directory = "/incoming/sales"
 pattern = "sales_*.csv"

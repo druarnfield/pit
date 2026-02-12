@@ -28,6 +28,7 @@ type HandlerFunc func(ctx context.Context, params map[string]string) (string, er
 // SecretsResolver resolves secrets by project scope.
 type SecretsResolver interface {
 	Resolve(project, key string) (string, error)
+	ResolveField(project, secret, field string) (string, error)
 }
 
 // Server is a JSON-over-socket server for task-to-orchestrator communication.
@@ -68,6 +69,17 @@ func NewServer(socketPath string, store SecretsResolver, dagName string) (*Serve
 				return "", fmt.Errorf("missing required parameter: key")
 			}
 			return store.Resolve(dagName, key)
+		}
+		s.handlers["get_secret_field"] = func(_ context.Context, params map[string]string) (string, error) {
+			secret := params["secret"]
+			if secret == "" {
+				return "", fmt.Errorf("missing required parameter: secret")
+			}
+			field := params["field"]
+			if field == "" {
+				return "", fmt.Errorf("missing required parameter: field")
+			}
+			return store.ResolveField(dagName, secret, field)
 		}
 	}
 

@@ -40,43 +40,49 @@ type profileData struct {
 }
 
 // GenerateProfiles creates a temporary directory containing a profiles.yml
-// for dbt, populated from secrets. Returns the directory path and a cleanup
-// function that removes the temp directory.
+// for dbt, populated from a structured secret. The connection parameter names
+// the structured secret whose fields (host, port, database, schema, user,
+// password) are used to generate the profile.
+//
+// Returns the directory path and a cleanup function that removes the temp directory.
 func GenerateProfiles(cfg *DBTProfilesInput, resolver SecretsResolver) (string, func(), error) {
 	noop := func() {}
 
 	if resolver == nil {
 		return "", noop, fmt.Errorf("secrets resolver is required for dbt profiles generation")
 	}
-
-	// Resolve required secrets
-	host, err := resolver.Resolve(cfg.DAGName, "dbt_host")
-	if err != nil {
-		return "", noop, fmt.Errorf("resolving dbt_host: %w", err)
+	if cfg.Connection == "" {
+		return "", noop, fmt.Errorf("dbt connection secret name is required (set connection in [dag.dbt])")
 	}
-	portStr, err := resolver.Resolve(cfg.DAGName, "dbt_port")
+
+	// Resolve required fields from the structured secret
+	host, err := resolver.ResolveField(cfg.DAGName, cfg.Connection, "host")
 	if err != nil {
-		return "", noop, fmt.Errorf("resolving dbt_port: %w", err)
+		return "", noop, fmt.Errorf("resolving %s.host: %w", cfg.Connection, err)
+	}
+	portStr, err := resolver.ResolveField(cfg.DAGName, cfg.Connection, "port")
+	if err != nil {
+		return "", noop, fmt.Errorf("resolving %s.port: %w", cfg.Connection, err)
 	}
 	port, err := strconv.Atoi(portStr)
 	if err != nil {
-		return "", noop, fmt.Errorf("dbt_port %q is not a valid integer: %w", portStr, err)
+		return "", noop, fmt.Errorf("%s.port %q is not a valid integer: %w", cfg.Connection, portStr, err)
 	}
-	database, err := resolver.Resolve(cfg.DAGName, "dbt_database")
+	database, err := resolver.ResolveField(cfg.DAGName, cfg.Connection, "database")
 	if err != nil {
-		return "", noop, fmt.Errorf("resolving dbt_database: %w", err)
+		return "", noop, fmt.Errorf("resolving %s.database: %w", cfg.Connection, err)
 	}
-	schema, err := resolver.Resolve(cfg.DAGName, "dbt_schema")
+	schema, err := resolver.ResolveField(cfg.DAGName, cfg.Connection, "schema")
 	if err != nil {
-		return "", noop, fmt.Errorf("resolving dbt_schema: %w", err)
+		return "", noop, fmt.Errorf("resolving %s.schema: %w", cfg.Connection, err)
 	}
-	user, err := resolver.Resolve(cfg.DAGName, "dbt_user")
+	user, err := resolver.ResolveField(cfg.DAGName, cfg.Connection, "user")
 	if err != nil {
-		return "", noop, fmt.Errorf("resolving dbt_user: %w", err)
+		return "", noop, fmt.Errorf("resolving %s.user: %w", cfg.Connection, err)
 	}
-	password, err := resolver.Resolve(cfg.DAGName, "dbt_password")
+	password, err := resolver.ResolveField(cfg.DAGName, cfg.Connection, "password")
 	if err != nil {
-		return "", noop, fmt.Errorf("resolving dbt_password: %w", err)
+		return "", noop, fmt.Errorf("resolving %s.password: %w", cfg.Connection, err)
 	}
 
 	// Create temp directory for profiles.yml
@@ -133,9 +139,10 @@ func GenerateProfiles(cfg *DBTProfilesInput, resolver SecretsResolver) (string, 
 
 // DBTProfilesInput holds the inputs needed for profiles generation.
 type DBTProfilesInput struct {
-	DAGName string
-	Profile string
-	Target  string
-	Driver  string // ODBC driver string; defaults to config.DefaultDBTDriver if empty
-	Threads string
+	DAGName    string
+	Profile    string
+	Target     string
+	Driver     string // ODBC driver string; defaults to config.DefaultDBTDriver if empty
+	Threads    string
+	Connection string // structured secret name for db credentials
 }

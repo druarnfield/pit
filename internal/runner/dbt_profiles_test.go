@@ -9,10 +9,14 @@ import (
 
 // mockResolver implements SecretsResolver for testing.
 type mockResolver struct {
-	secrets map[string]string
+	secrets map[string]string            // flat key→value for Resolve
+	fields  map[string]map[string]string // secret→field→value for ResolveField
 }
 
 func (m *mockResolver) Resolve(project, key string) (string, error) {
+	if m.secrets == nil {
+		return "", fmt.Errorf("secret %q not found", key)
+	}
 	v, ok := m.secrets[key]
 	if !ok {
 		return "", fmt.Errorf("secret %q not found", key)
@@ -20,20 +24,38 @@ func (m *mockResolver) Resolve(project, key string) (string, error) {
 	return v, nil
 }
 
+func (m *mockResolver) ResolveField(project, secret, field string) (string, error) {
+	if m.fields == nil {
+		return "", fmt.Errorf("secret %q not found", secret)
+	}
+	sec, ok := m.fields[secret]
+	if !ok {
+		return "", fmt.Errorf("secret %q not found", secret)
+	}
+	val, ok := sec[field]
+	if !ok {
+		return "", fmt.Errorf("field %q not found in secret %q", field, secret)
+	}
+	return val, nil
+}
+
 func TestGenerateProfiles(t *testing.T) {
-	resolver := &mockResolver{secrets: map[string]string{
-		"dbt_host":     "sql-server.example.com",
-		"dbt_port":     "1433",
-		"dbt_database": "analytics",
-		"dbt_schema":   "dbo",
-		"dbt_user":     "dbt_user",
-		"dbt_password": "secret123",
+	resolver := &mockResolver{fields: map[string]map[string]string{
+		"my_db": {
+			"host":     "sql-server.example.com",
+			"port":     "1433",
+			"database": "analytics",
+			"schema":   "dbo",
+			"user":     "dbt_user",
+			"password": "secret123",
+		},
 	}}
 
 	input := &DBTProfilesInput{
-		DAGName: "my_dbt_dag",
-		Profile: "analytics",
-		Target:  "prod",
+		DAGName:    "my_dbt_dag",
+		Profile:    "analytics",
+		Target:     "prod",
+		Connection: "my_db",
 	}
 
 	dir, cleanup, err := GenerateProfiles(input, resolver)
@@ -73,17 +95,20 @@ func TestGenerateProfiles(t *testing.T) {
 }
 
 func TestGenerateProfiles_DefaultProfileAndTarget(t *testing.T) {
-	resolver := &mockResolver{secrets: map[string]string{
-		"dbt_host":     "host",
-		"dbt_port":     "1433",
-		"dbt_database": "db",
-		"dbt_schema":   "dbo",
-		"dbt_user":     "user",
-		"dbt_password": "pass",
+	resolver := &mockResolver{fields: map[string]map[string]string{
+		"my_db": {
+			"host":     "host",
+			"port":     "1433",
+			"database": "db",
+			"schema":   "dbo",
+			"user":     "user",
+			"password": "pass",
+		},
 	}}
 
 	input := &DBTProfilesInput{
-		DAGName: "my_dag",
+		DAGName:    "my_dag",
+		Connection: "my_db",
 		// Profile and Target left empty to test defaults
 	}
 
@@ -109,27 +134,29 @@ func TestGenerateProfiles_DefaultProfileAndTarget(t *testing.T) {
 	}
 }
 
-func TestGenerateProfiles_MissingSecret(t *testing.T) {
-	resolver := &mockResolver{secrets: map[string]string{
-		"dbt_host": "host",
-		// Missing other secrets
+func TestGenerateProfiles_MissingField(t *testing.T) {
+	resolver := &mockResolver{fields: map[string]map[string]string{
+		"my_db": {
+			"host": "host",
+			// Missing port and other fields
+		},
 	}}
 
-	input := &DBTProfilesInput{DAGName: "test"}
+	input := &DBTProfilesInput{DAGName: "test", Connection: "my_db"}
 
 	_, cleanup, err := GenerateProfiles(input, resolver)
 	defer cleanup()
 
 	if err == nil {
-		t.Fatal("GenerateProfiles() expected error for missing secret, got nil")
+		t.Fatal("GenerateProfiles() expected error for missing field, got nil")
 	}
-	if !strings.Contains(err.Error(), "dbt_port") {
-		t.Errorf("error = %q, want it to mention missing secret", err)
+	if !strings.Contains(err.Error(), "port") {
+		t.Errorf("error = %q, want it to mention missing field", err)
 	}
 }
 
 func TestGenerateProfiles_NilResolver(t *testing.T) {
-	input := &DBTProfilesInput{DAGName: "test"}
+	input := &DBTProfilesInput{DAGName: "test", Connection: "my_db"}
 
 	_, cleanup, err := GenerateProfiles(input, nil)
 	defer cleanup()
@@ -142,17 +169,35 @@ func TestGenerateProfiles_NilResolver(t *testing.T) {
 	}
 }
 
-func TestGenerateProfiles_InvalidPort(t *testing.T) {
-	resolver := &mockResolver{secrets: map[string]string{
-		"dbt_host":     "host",
-		"dbt_port":     "not_a_number",
-		"dbt_database": "db",
-		"dbt_schema":   "dbo",
-		"dbt_user":     "user",
-		"dbt_password": "pass",
-	}}
+func TestGenerateProfiles_MissingConnection(t *testing.T) {
+	resolver := &mockResolver{}
 
 	input := &DBTProfilesInput{DAGName: "test"}
+
+	_, cleanup, err := GenerateProfiles(input, resolver)
+	defer cleanup()
+
+	if err == nil {
+		t.Fatal("GenerateProfiles() expected error for missing connection, got nil")
+	}
+	if !strings.Contains(err.Error(), "connection secret name is required") {
+		t.Errorf("error = %q, want it to mention connection", err)
+	}
+}
+
+func TestGenerateProfiles_InvalidPort(t *testing.T) {
+	resolver := &mockResolver{fields: map[string]map[string]string{
+		"my_db": {
+			"host":     "host",
+			"port":     "not_a_number",
+			"database": "db",
+			"schema":   "dbo",
+			"user":     "user",
+			"password": "pass",
+		},
+	}}
+
+	input := &DBTProfilesInput{DAGName: "test", Connection: "my_db"}
 
 	_, cleanup, err := GenerateProfiles(input, resolver)
 	defer cleanup()
@@ -166,18 +211,21 @@ func TestGenerateProfiles_InvalidPort(t *testing.T) {
 }
 
 func TestGenerateProfiles_CustomDriver(t *testing.T) {
-	resolver := &mockResolver{secrets: map[string]string{
-		"dbt_host":     "host",
-		"dbt_port":     "1433",
-		"dbt_database": "db",
-		"dbt_schema":   "dbo",
-		"dbt_user":     "user",
-		"dbt_password": "pass",
+	resolver := &mockResolver{fields: map[string]map[string]string{
+		"my_db": {
+			"host":     "host",
+			"port":     "1433",
+			"database": "db",
+			"schema":   "dbo",
+			"user":     "user",
+			"password": "pass",
+		},
 	}}
 
 	input := &DBTProfilesInput{
-		DAGName: "test",
-		Driver:  "ODBC Driver 18 for SQL Server",
+		DAGName:    "test",
+		Driver:     "ODBC Driver 18 for SQL Server",
+		Connection: "my_db",
 	}
 
 	dir, cleanup, err := GenerateProfiles(input, resolver)
@@ -198,19 +246,22 @@ func TestGenerateProfiles_CustomDriver(t *testing.T) {
 }
 
 func TestGenerateProfiles_CustomProfileAndTarget(t *testing.T) {
-	resolver := &mockResolver{secrets: map[string]string{
-		"dbt_host":     "host",
-		"dbt_port":     "1433",
-		"dbt_database": "db",
-		"dbt_schema":   "dbo",
-		"dbt_user":     "user",
-		"dbt_password": "pass",
+	resolver := &mockResolver{fields: map[string]map[string]string{
+		"my_db": {
+			"host":     "host",
+			"port":     "1433",
+			"database": "db",
+			"schema":   "dbo",
+			"user":     "user",
+			"password": "pass",
+		},
 	}}
 
 	input := &DBTProfilesInput{
-		DAGName: "my_dag",
-		Profile: "custom_profile",
-		Target:  "dev",
+		DAGName:    "my_dag",
+		Profile:    "custom_profile",
+		Target:     "dev",
+		Connection: "my_db",
 	}
 
 	dir, cleanup, err := GenerateProfiles(input, resolver)

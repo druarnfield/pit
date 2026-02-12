@@ -210,10 +210,8 @@ name = "sales_ingest"
 overlap = "skip"
 
 [dag.ftp_watch]
-host = "ftp.example.com"
+secret = "ftp_creds"               # structured secret for host, user, password
 port = 21
-user = "data_user"
-password_secret = "ftp_password"    # resolved from secrets
 tls = true
 directory = "/incoming/sales"
 pattern = "sales_*.csv"
@@ -221,6 +219,17 @@ archive_dir = "/archive/sales"      # move files here after success
 poll_interval = "30s"
 stable_seconds = 30                  # wait for file to stop growing
 ```
+
+The `secret` field references a structured secret containing `host`, `user`, and `password` fields:
+
+```toml
+[global.ftp_creds]
+host = "ftp.example.com"
+user = "data_user"
+password = "secret123"
+```
+
+Legacy configuration using `host`, `user`, and `password_secret` as separate fields is still supported for backward compatibility.
 
 Both trigger types can be combined on the same DAG.
 
@@ -287,20 +296,34 @@ Secrets are stored in a TOML file outside the repo (e.g. `/etc/pit/secrets.toml`
 pit run my_pipeline --secrets ./secrets.toml
 ```
 
-Secrets are organised by project scope with a `[global]` fallback:
+Secrets are organised by project scope with a `[global]` fallback. A secret can be either a **plain value** or a **structured secret** with multiple fields:
 
 ```toml
 [global]
-smtp_password = "..."
+smtp_password = "plain_secret"
+
+# Structured secret — one secret with many fields
+[global.warehouse_db]
+host = "sql-server.example.com"
+port = "1433"
+database = "warehouse"
+schema = "dbo"
+user = "admin"
+password = "secret"
 
 [claims_pipeline]
 claims_db = "sqlserver://user:pass@host/db"
 
-[warehouse_transforms]
-warehouse_db = "sqlserver://user:pass@host/warehouse"
+# FTP credentials as a structured secret
+[claims_pipeline.ftp_creds]
+host = "ftp.example.com"
+user = "ftpuser"
+password = "secret123"
 ```
 
 Resolution order: project-scoped section first, then `[global]`.
+
+Plain secrets are resolved with `Resolve(project, key)`. Structured secrets support field-level access with `ResolveField(project, secret, field)`. When `Resolve` is called on a structured secret, it returns a JSON object of all fields.
 
 ## SDK Socket
 
@@ -310,9 +333,17 @@ Python tasks use the bundled SDK client:
 
 ```python
 from pit_sdk import get_secret, read_sql, output_sql, write_output, load_data
+import json
 
-# Read secrets
+# Read a plain secret
 conn_str = get_secret("claims_db")
+
+# Read a structured secret (returns JSON)
+db_creds = json.loads(get_secret("warehouse_db"))
+host = db_creds["host"]
+
+# Read a single field from a structured secret
+host = get_secret_field("warehouse_db", "host")
 
 # Query straight to Parquet on disk (no table held in memory)
 output_sql(conn_str, "SELECT * FROM staging.claims", "claims")
@@ -375,6 +406,7 @@ extra_deps = ["dbt-utils"]      # additional pip packages (optional)
 project_dir = "dbt_repo"        # relative path to dbt project root
 profile = "analytics"           # profile name in profiles.yml (default: dag name)
 target = "prod"                 # target name (default: "prod")
+connection = "analytics_db"     # structured secret name for db credentials
 
 [[tasks]]
 name = "staging"
@@ -398,16 +430,16 @@ For dbt tasks, the `script` field contains the dbt subcommand and arguments (e.g
 
 ### dbt Secrets
 
-dbt connection details are resolved from the secrets file using these keys:
+dbt connection details are resolved from a structured secret named by the `connection` field in `[dag.dbt]`. The secret must have these fields:
 
 ```toml
-[analytics_dbt]
-dbt_host = "sql-server.example.com"
-dbt_port = "1433"
-dbt_database = "analytics"
-dbt_schema = "dbo"
-dbt_user = "dbt_user"
-dbt_password = "secret123"
+[analytics_dbt.analytics_db]
+host = "sql-server.example.com"
+port = "1433"
+database = "analytics"
+schema = "dbo"
+user = "dbt_user"
+password = "secret123"
 ```
 
 Pit generates a `profiles.yml` in a temporary directory before each run and sets `DBT_PROFILES_DIR` so dbt picks it up automatically.
@@ -427,7 +459,8 @@ The Python SDK (`sdk/python/`) provides helpers for tasks running under Pit:
 
 | Function | Description |
 |----------|-------------|
-| `get_secret(key)` | Retrieve a secret from the orchestrator's secrets store |
+| `get_secret(key)` | Retrieve a secret (plain string or JSON for structured secrets) |
+| `get_secret_field(secret, field)` | Retrieve a single field from a structured secret |
 | `read_sql(conn, query)` | Read from a database via ConnectorX (returns Arrow Table) |
 | `output_sql(conn, query, name)` | Query straight to Parquet on disk — no table held in Python memory |
 | `write_output(name, data)` | Write Arrow/pandas/polars data to Parquet in the data directory |

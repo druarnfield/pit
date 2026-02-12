@@ -61,15 +61,36 @@ def _request(method: str, params: dict[str, str] | None = None) -> str:
 def get_secret(key: str) -> str:
     """Retrieve a secret from the Pit secrets store.
 
+    For plain secrets, returns the string value.
+    For structured secrets (with multiple fields), returns a JSON string
+    that can be parsed with ``json.loads()``.
+
     Args:
         key: The secret key to look up. Resolution checks the current
              project's section first, then falls back to [global].
 
     Returns:
-        The secret value as a string.
+        The secret value as a string (or JSON for structured secrets).
 
     Raises:
         RuntimeError: If PIT_SOCKET is not set, the key is not found,
                       or the SDK server returns an error.
     """
     return _request("get_secret", {"key": key})
+
+
+def get_secret_field(secret: str, field: str) -> str:
+    """Retrieve a single field from a structured secret.
+
+    Args:
+        secret: The name of the structured secret.
+        field: The field name within the structured secret.
+
+    Returns:
+        The field value as a string.
+
+    Raises:
+        RuntimeError: If PIT_SOCKET is not set, the secret or field is
+                      not found, or the SDK server returns an error.
+    """
+    return _request("get_secret_field", {"secret": secret, "field": field})

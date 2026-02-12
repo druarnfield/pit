@@ -21,6 +21,7 @@ const (
 // SecretsResolver resolves secrets by project scope.
 type SecretsResolver interface {
 	Resolve(project, key string) (string, error)
+	ResolveField(project, secret, field string) (string, error)
 }
 
 // Run holds the state of a single DAG execution.

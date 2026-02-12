@@ -11,6 +11,7 @@ extra_deps = ["dbt-utils"]
 project_dir = "dbt_repo"
 profile = "analytics"
 target = "prod"
+connection = "analytics_db"
 
 [[tasks]]
 name = "staging"

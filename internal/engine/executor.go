@@ -317,10 +317,11 @@ func executeTask(ctx context.Context, ti *TaskInstance, run *Run, cfg *config.Pr
 		}
 
 		profilesInput := &runner.DBTProfilesInput{
-			DAGName: run.DAGName,
-			Profile: cfg.DAG.DBT.Profile,
-			Target:  cfg.DAG.DBT.Target,
-			Driver:  opts.DBTDriver,
+			DAGName:    run.DAGName,
+			Profile:    cfg.DAG.DBT.Profile,
+			Target:     cfg.DAG.DBT.Target,
+			Driver:     opts.DBTDriver,
+			Connection: cfg.DAG.DBT.Connection,
 		}
 
 		var profilesDir string

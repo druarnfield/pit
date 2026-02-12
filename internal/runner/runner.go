@@ -11,6 +11,7 @@ import (
 // SecretsResolver resolves secrets by project scope. nil if no secrets configured.
 type SecretsResolver interface {
 	Resolve(project, key string) (string, error)
+	ResolveField(project, secret, field string) (string, error)
 }
 
 // RunContext holds the information a runner needs to execute a task.

@@ -13,6 +13,7 @@ import (
 // SecretsResolver resolves secrets by project scope.
 type SecretsResolver interface {
 	Resolve(project, key string) (string, error)
+	ResolveField(project, secret, field string) (string, error)
 }
 
 // fileState tracks a file's stability during polling.
@@ -31,7 +32,7 @@ type FTPWatchTrigger struct {
 // NewFTPWatchTrigger creates an FTP watch trigger.
 func NewFTPWatchTrigger(dagName string, cfg *config.FTPWatchConfig, secrets SecretsResolver) (*FTPWatchTrigger, error) {
 	if secrets == nil {
-		return nil, fmt.Errorf("secrets store required for FTP watch (password_secret = %q)", cfg.PasswordSecret)
+		return nil, fmt.Errorf("secrets store required for FTP watch")
 	}
 	return &FTPWatchTrigger{dagName: dagName, cfg: cfg, secrets: secrets}, nil
 }
@@ -60,14 +61,42 @@ func (ft *FTPWatchTrigger) Start(ctx context.Context, events chan<- Event) error
 	}
 }
 
-func (ft *FTPWatchTrigger) poll(ctx context.Context, events chan<- Event, tracking map[string]fileState) {
-	password, err := ft.secrets.Resolve(ft.dagName, ft.cfg.PasswordSecret)
+// resolveFTPCredentials resolves host, user, and password for the FTP connection.
+// When cfg.Secret is set, all three are pulled from a structured secret.
+// Otherwise falls back to legacy cfg.Host / cfg.User / cfg.PasswordSecret fields.
+func (ft *FTPWatchTrigger) resolveFTPCredentials() (host, user, password string, err error) {
+	if ft.cfg.Secret != "" {
+		host, err = ft.secrets.ResolveField(ft.dagName, ft.cfg.Secret, "host")
+		if err != nil {
+			return "", "", "", fmt.Errorf("resolving %s.host: %w", ft.cfg.Secret, err)
+		}
+		user, err = ft.secrets.ResolveField(ft.dagName, ft.cfg.Secret, "user")
+		if err != nil {
+			return "", "", "", fmt.Errorf("resolving %s.user: %w", ft.cfg.Secret, err)
+		}
+		password, err = ft.secrets.ResolveField(ft.dagName, ft.cfg.Secret, "password")
+		if err != nil {
+			return "", "", "", fmt.Errorf("resolving %s.password: %w", ft.cfg.Secret, err)
+		}
+		return host, user, password, nil
+	}
+
+	// Legacy: host and user from config, password from plain secret
+	password, err = ft.secrets.Resolve(ft.dagName, ft.cfg.PasswordSecret)
 	if err != nil {
-		log.Printf("[ftp_watch] %s: resolving password: %v", ft.dagName, err)
+		return "", "", "", fmt.Errorf("resolving password secret %q: %w", ft.cfg.PasswordSecret, err)
+	}
+	return ft.cfg.Host, ft.cfg.User, password, nil
+}
+
+func (ft *FTPWatchTrigger) poll(ctx context.Context, events chan<- Event, tracking map[string]fileState) {
+	host, user, password, err := ft.resolveFTPCredentials()
+	if err != nil {
+		log.Printf("[ftp_watch] %s: %v", ft.dagName, err)
 		return
 	}
 
-	client, err := pitftp.Connect(ft.cfg.Host, ft.cfg.Port, ft.cfg.User, password, ft.cfg.TLS)
+	client, err := pitftp.Connect(host, ft.cfg.Port, user, password, ft.cfg.TLS)
 	if err != nil {
 		log.Printf("[ftp_watch] %s: connect: %v", ft.dagName, err)
 		return

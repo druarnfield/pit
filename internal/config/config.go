@@ -63,14 +63,16 @@ type DBTConfig struct {
 	Profile    string   `toml:"profile"`     // profile name (default: dag name)
 	Target     string   `toml:"target"`      // target name (default: "prod")
 	Threads    string   `toml:"threads"`     // number of threads to run with
+	Connection string   `toml:"connection"`  // structured secret name for db credentials
 }
 
 // FTPWatchConfig defines an FTP file watch trigger for a DAG.
 type FTPWatchConfig struct {
-	Host           string   `toml:"host"`
+	Secret         string   `toml:"secret"`          // structured secret name for host, user, password
+	Host           string   `toml:"host"`             // deprecated: use secret instead
 	Port           int      `toml:"port"`
-	User           string   `toml:"user"`
-	PasswordSecret string   `toml:"password_secret"`
+	User           string   `toml:"user"`             // deprecated: use secret instead
+	PasswordSecret string   `toml:"password_secret"`  // deprecated: use secret instead
 	TLS            bool     `toml:"tls"`
 	Directory      string   `toml:"directory"`
 	Pattern        string   `toml:"pattern"`

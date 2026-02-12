@@ -14,7 +14,8 @@ import (
 
 // mockStore implements SecretsResolver for testing.
 type mockStore struct {
-	data map[string]map[string]string
+	data   map[string]map[string]string            // project → key → value (plain secrets)
+	fields map[string]map[string]map[string]string  // project → secret → field → value (structured)
 }
 
 func (m *mockStore) Resolve(project, key string) (string, error) {
@@ -29,6 +30,29 @@ func (m *mockStore) Resolve(project, key string) (string, error) {
 		}
 	}
 	return "", fmt.Errorf("secret %q not found for project %q", key, project)
+}
+
+func (m *mockStore) ResolveField(project, secret, field string) (string, error) {
+	if m.fields == nil {
+		return "", fmt.Errorf("secret %q not found for project %q", secret, project)
+	}
+	if section, ok := m.fields[project]; ok {
+		if sec, ok := section[secret]; ok {
+			if val, ok := sec[field]; ok {
+				return val, nil
+			}
+			return "", fmt.Errorf("field %q not found in secret %q", field, secret)
+		}
+	}
+	if section, ok := m.fields["global"]; ok {
+		if sec, ok := section[secret]; ok {
+			if val, ok := sec[field]; ok {
+				return val, nil
+			}
+			return "", fmt.Errorf("field %q not found in secret %q", field, secret)
+		}
+	}
+	return "", fmt.Errorf("secret %q not found for project %q", secret, project)
 }
 
 // testNetwork returns the network type used by the SDK server on the current platform.
@@ -312,5 +336,73 @@ func TestNewServer_NilStore(t *testing.T) {
 	})
 	if !strings.Contains(resp.Error, "unknown method") {
 		t.Errorf("expected 'unknown method' error, got %q", resp.Error)
+	}
+}
+
+func TestGetSecretField_RoundTrip(t *testing.T) {
+	store := &mockStore{
+		data: map[string]map[string]string{},
+		fields: map[string]map[string]map[string]string{
+			"my_dag": {
+				"db_creds": {
+					"host":     "db.example.com",
+					"user":     "admin",
+					"password": "secret",
+				},
+			},
+		},
+	}
+	sockPath, _ := startTestServer(t, store, "my_dag")
+
+	resp := sendRequest(t, sockPath, Request{
+		Method: "get_secret_field",
+		Params: map[string]string{"secret": "db_creds", "field": "host"},
+	})
+
+	if resp.Error != "" {
+		t.Fatalf("get_secret_field returned error: %s", resp.Error)
+	}
+	if resp.Result != "db.example.com" {
+		t.Errorf("get_secret_field result = %q, want %q", resp.Result, "db.example.com")
+	}
+}
+
+func TestGetSecretField_MissingSecret(t *testing.T) {
+	store := &mockStore{
+		data:   map[string]map[string]string{},
+		fields: map[string]map[string]map[string]string{},
+	}
+	sockPath, _ := startTestServer(t, store, "my_dag")
+
+	resp := sendRequest(t, sockPath, Request{
+		Method: "get_secret_field",
+		Params: map[string]string{"secret": "nonexistent", "field": "host"},
+	})
+
+	if resp.Error == "" {
+		t.Error("expected error for missing secret, got none")
+	}
+}
+
+func TestGetSecretField_MissingParams(t *testing.T) {
+	store := &mockStore{data: map[string]map[string]string{}}
+	sockPath, _ := startTestServer(t, store, "my_dag")
+
+	// Missing secret param
+	resp := sendRequest(t, sockPath, Request{
+		Method: "get_secret_field",
+		Params: map[string]string{"field": "host"},
+	})
+	if !strings.Contains(resp.Error, "secret") {
+		t.Errorf("error = %q, want it to mention 'secret'", resp.Error)
+	}
+
+	// Missing field param
+	resp = sendRequest(t, sockPath, Request{
+		Method: "get_secret_field",
+		Params: map[string]string{"secret": "db_creds"},
+	})
+	if !strings.Contains(resp.Error, "field") {
+		t.Errorf("error = %q, want it to mention 'field'", resp.Error)
 	}
 }

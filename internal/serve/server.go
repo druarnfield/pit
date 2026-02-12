@@ -229,18 +229,46 @@ func (s *Server) handleEvent(ctx context.Context, ev trigger.Event, wg *sync.Wai
 	}()
 }
 
+// resolveFTPCredentials resolves host, user, and password for the FTP connection.
+// When cfg.Secret is set, all three are pulled from a structured secret.
+// Otherwise falls back to legacy cfg.Host / cfg.User / cfg.PasswordSecret fields.
+func (s *Server) resolveFTPCredentials(dagName string, ftpCfg *config.FTPWatchConfig) (host, user, password string, err error) {
+	if ftpCfg.Secret != "" {
+		host, err = s.store.ResolveField(dagName, ftpCfg.Secret, "host")
+		if err != nil {
+			return "", "", "", fmt.Errorf("resolving %s.host: %w", ftpCfg.Secret, err)
+		}
+		user, err = s.store.ResolveField(dagName, ftpCfg.Secret, "user")
+		if err != nil {
+			return "", "", "", fmt.Errorf("resolving %s.user: %w", ftpCfg.Secret, err)
+		}
+		password, err = s.store.ResolveField(dagName, ftpCfg.Secret, "password")
+		if err != nil {
+			return "", "", "", fmt.Errorf("resolving %s.password: %w", ftpCfg.Secret, err)
+		}
+		return host, user, password, nil
+	}
+
+	// Legacy: host and user from config, password from plain secret
+	password, err = s.store.Resolve(dagName, ftpCfg.PasswordSecret)
+	if err != nil {
+		return "", "", "", fmt.Errorf("resolving password: %w", err)
+	}
+	return ftpCfg.Host, ftpCfg.User, password, nil
+}
+
 func (s *Server) downloadFTPFiles(ev trigger.Event) (string, error) {
 	ftpCfg, ok := s.ftpConfigs[ev.DAGName]
 	if !ok {
 		return "", fmt.Errorf("no FTP config for DAG %q", ev.DAGName)
 	}
 
-	password, err := s.store.Resolve(ev.DAGName, ftpCfg.PasswordSecret)
+	host, user, password, err := s.resolveFTPCredentials(ev.DAGName, ftpCfg)
 	if err != nil {
-		return "", fmt.Errorf("resolving password: %w", err)
+		return "", err
 	}
 
-	client, err := pitftp.Connect(ftpCfg.Host, ftpCfg.Port, ftpCfg.User, password, ftpCfg.TLS)
+	client, err := pitftp.Connect(host, ftpCfg.Port, user, password, ftpCfg.TLS)
 	if err != nil {
 		return "", err
 	}
@@ -281,12 +309,12 @@ func (s *Server) archiveFTPFiles(ev trigger.Event) error {
 		return nil
 	}
 
-	password, err := s.store.Resolve(ev.DAGName, ftpCfg.PasswordSecret)
+	host, user, password, err := s.resolveFTPCredentials(ev.DAGName, ftpCfg)
 	if err != nil {
-		return fmt.Errorf("resolving password: %w", err)
+		return err
 	}
 
-	client, err := pitftp.Connect(ftpCfg.Host, ftpCfg.Port, ftpCfg.User, password, ftpCfg.TLS)
+	client, err := pitftp.Connect(host, ftpCfg.Port, user, password, ftpCfg.TLS)
 	if err != nil {
 		return err
 	}

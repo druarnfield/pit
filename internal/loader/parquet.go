@@ -22,10 +22,10 @@ type parquetStream struct {
 	colIndices []int // explicit column indices (avoids nil misinterpretation)
 
 	// iteration state
-	rgIdx  int              // next row group index to read
-	curTbl arrow.Table       // current row group table (nil until first Next)
+	rgIdx  int                // next row group index to read
+	curTbl arrow.Table        // current row group table (nil until first Next)
 	curTR  *array.TableReader // current batch reader within the row group
-	curRec arrow.Record      // most recent record from Record()
+	curRec arrow.Record       // most recent record from Record()
 	err    error
 }
 
@@ -186,6 +186,8 @@ func arrowValue(col arrow.Array, idx int) (interface{}, error) {
 	case *uint32Array:
 		return c.Value(idx), nil
 	case *uint64Array:
+		return c.Value(idx), nil
+	case *largeStringArray:
 		return c.Value(idx), nil
 	default:
 		return nil, fmt.Errorf("unsupported arrow type %T for column at index %d", col, idx)

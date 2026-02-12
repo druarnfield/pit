@@ -42,6 +42,8 @@ func arrowTypeToMSSQL(dt arrow.DataType) (string, error) {
 		return "DATE", nil
 	case arrow.BINARY:
 		return "VARBINARY(MAX)", nil
+	case arrow.LARGE_STRING:
+		return "NVARCHAR(MAX)", nil
 	default:
 		return "", fmt.Errorf("unsupported Arrow type %s for MSSQL column", dt)
 	}

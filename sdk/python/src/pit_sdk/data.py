@@ -74,7 +74,7 @@ def read_input(name: str) -> pa.Table:
 
 
 def load_data(
-    file: str,
+    name: str,
     table: str,
     connection: str,
     *,
@@ -88,8 +88,8 @@ def load_data(
     database driver (no ODBC required).
 
     Args:
-        file: Parquet file name relative to the data directory
-              (e.g. "output.parquet").
+        name: Output name (without extension). Reads from
+              ``{data_dir}/{name}.parquet``.
         table: Target table name.
         connection: Secret key for the connection string
                     (resolved from secrets store).
@@ -109,7 +109,7 @@ def load_data(
     return _request(
         "load_data",
         {
-            "file": file,
+            "file": f"{name}.parquet",
             "table": table,
             "connection": connection,
             "schema": schema,

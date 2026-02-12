@@ -99,6 +99,20 @@ func (c *Client) Download(remotePath, localPath string) error {
 	return nil
 }
 
+// Upload stores a local file on the FTP server.
+func (c *Client) Upload(localPath, remotePath string) error {
+	f, err := os.Open(localPath)
+	if err != nil {
+		return fmt.Errorf("opening %q: %w", localPath, err)
+	}
+	defer f.Close()
+
+	if err := c.conn.Stor(remotePath, f); err != nil {
+		return fmt.Errorf("uploading to %q: %w", remotePath, err)
+	}
+	return nil
+}
+
 // Move renames a file on the server (RNFR/RNTO).
 func (c *Client) Move(oldPath, newPath string) error {
 	if err := c.conn.Rename(oldPath, newPath); err != nil {

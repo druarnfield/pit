@@ -466,6 +466,10 @@ The Python SDK (`sdk/python/`) provides helpers for tasks running under Pit:
 | `write_output(name, data)` | Write Arrow/pandas/polars data to Parquet in the data directory |
 | `read_input(name)` | Read a named Parquet file from the data directory |
 | `load_data(file, table, conn)` | Trigger Go-side bulk load of Parquet into a database |
+| `ftp_list(secret, directory, pattern)` | List files on an FTP server matching a glob pattern |
+| `ftp_download(secret, path, *, pattern)` | Download file(s) from FTP to the data directory |
+| `ftp_upload(secret, local_name, remote_path)` | Upload a file from the data directory to FTP |
+| `ftp_move(secret, src, dst)` | Move or rename a file on an FTP server |
 
 The `load_data` function accepts optional `schema` (default `"dbo"`), and `mode` parameters. Supported modes:
 
@@ -476,6 +480,42 @@ The `load_data` function accepts optional `schema` (default `"dbo"`), and `mode`
 | `create_or_replace` | Drop the table if it exists, recreate it from the Parquet schema, then insert rows |
 
 Database reads use ConnectorX (Rust-native, no ODBC drivers needed). Database writes go through the Go orchestrator's bulk loader via RPC (also no ODBC).
+
+### FTP Operations
+
+The FTP functions communicate with the Go FTP client through the SDK socket. Credentials are resolved from structured secrets — Python never sees passwords.
+
+```python
+from pit_sdk import ftp_list, ftp_download, ftp_upload, ftp_move
+
+# List files matching a pattern
+files = ftp_list("ftp_creds", "/incoming/sales", "sales_*.csv")
+
+# Download a single file
+ftp_download("ftp_creds", "/incoming/sales/report.csv")
+
+# Download all matching files from a directory
+downloaded = ftp_download("ftp_creds", "/incoming/sales", pattern="*.csv")
+
+# Upload a file from the data directory
+ftp_upload("ftp_creds", "results.parquet", "/outgoing/results.parquet")
+
+# Move/archive a file on the server
+ftp_move("ftp_creds", "/incoming/sales/report.csv", "/archive/sales/report.csv")
+```
+
+The `secret` parameter references a structured secret with FTP connection details:
+
+```toml
+[global.ftp_creds]
+host = "ftp.example.com"
+user = "data_user"
+password = "secret123"
+port = "21"        # optional, default 21
+tls = "true"       # optional, default false
+```
+
+Downloaded files are saved to the run's `data/` directory (`PIT_DATA_DIR`). Uploaded files are read from the same directory.
 
 ## Roadmap
 

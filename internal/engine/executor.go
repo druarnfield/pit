@@ -69,6 +69,12 @@ func Execute(ctx context.Context, cfg *config.ProjectConfig, opts ExecuteOpts) (
 	// Register the load_data handler for Python SDK → Go bulk load
 	sdkServer.RegisterHandler("load_data", makeLoadDataHandler(store, cfg.DAG.Name, dataDir))
 
+	// Register FTP handlers for Python SDK → Go FTP operations
+	sdkServer.RegisterHandler("ftp_list", makeFTPListHandler(store, cfg.DAG.Name))
+	sdkServer.RegisterHandler("ftp_download", makeFTPDownloadHandler(store, cfg.DAG.Name, dataDir))
+	sdkServer.RegisterHandler("ftp_upload", makeFTPUploadHandler(store, cfg.DAG.Name, dataDir))
+	sdkServer.RegisterHandler("ftp_move", makeFTPMoveHandler(store, cfg.DAG.Name))
+
 	socketPath := sdkServer.Addr()
 	sdkCtx, sdkCancel := context.WithCancel(context.Background())
 	go sdkServer.Serve(sdkCtx)

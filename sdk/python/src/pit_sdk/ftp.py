@@ -54,7 +54,7 @@ def ftp_download(
             is treated as the directory to list.
 
     Returns:
-        List of downloaded filenames (relative to PIT_DATA_DIR).
+        List of local file paths (absolute, inside PIT_DATA_DIR).
     """
     params: dict[str, str] = {"secret": secret}
     if pattern is not None:

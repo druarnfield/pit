@@ -96,7 +96,7 @@ func makeFTPListHandler(store *secrets.Store, dagName string) sdk.HandlerFunc {
 //
 // Single file mode:   params: secret, remote_path
 // Pattern match mode: params: secret, directory, pattern
-// Returns: JSON array of downloaded filenames
+// Returns: JSON array of local file paths (absolute, inside dataDir)
 func makeFTPDownloadHandler(store *secrets.Store, dagName string, dataDir string) sdk.HandlerFunc {
 	return func(ctx context.Context, params map[string]string) (string, error) {
 		secretName := params["secret"]
@@ -130,7 +130,7 @@ func makeFTPDownloadHandler(store *secrets.Store, dagName string, dataDir string
 				if err := client.Download(remotePath, localPath); err != nil {
 					return "", fmt.Errorf("downloading %q: %w", f.Name, err)
 				}
-				downloaded = append(downloaded, f.Name)
+				downloaded = append(downloaded, localPath)
 			}
 		} else {
 			// Single file mode
@@ -152,7 +152,7 @@ func makeFTPDownloadHandler(store *secrets.Store, dagName string, dataDir string
 			if err := client.Download(remotePath, localPath); err != nil {
 				return "", err
 			}
-			downloaded = append(downloaded, fileName)
+			downloaded = append(downloaded, localPath)
 		}
 
 		b, err := json.Marshal(downloaded)

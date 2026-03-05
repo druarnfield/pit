@@ -118,6 +118,43 @@ type = "table"
 location = "warehouse.staging.claims"
 ```
 
+### Git-backed Projects
+
+A DAG can pull its source from a remote git repository instead of a local directory. Add `git_url` and `git_ref` to `[dag]`:
+
+```toml
+[dag]
+name = "claims_pipeline"
+git_url = "git@github.com:company/claims.git"
+git_ref = "main"            # branch, tag, or commit SHA
+schedule = "0 6 * * *"
+
+[[tasks]]
+name = "extract"
+script = "tasks/extract.py"   # path relative to repo root
+```
+
+Both fields must be set together (or both omitted). The `pit.toml` itself stays local in `projects/<name>/`; only the task source files come from the remote repo.
+
+**How it works:**
+
+1. Before each run Pit clones the repo (or fetches updates if already cloned) into `repo_cache/<dag_name>/`.
+2. The cached clone is snapshotted into the run directory exactly like a local project.
+3. Python venv (`uv`) is resolved against the persistent cache, so dependencies are only reinstalled when the lockfile changes.
+
+Pit shells out to the system `git` binary, inheriting your SSH agent and credential helper configuration automatically.
+
+**Directory layout with git-backed projects:**
+
+```
+<root>/
+├── projects/<name>/pit.toml    ← DAG definition (local)
+├── repo_cache/<name>/          ← persistent clone (managed by pit)
+└── runs/<run-id>/              ← snapshot + logs (unchanged)
+```
+
+Validation skips local filesystem checks (script existence, `dbt.project_dir`) for git-backed projects since the source is not on disk until run time.
+
 ### Task Runners
 
 Runner is determined by file extension, with an optional override:
@@ -240,6 +277,7 @@ Create a `pit_config.toml` in the project root to set workspace-level defaults:
 ```toml
 secrets_dir = "secrets/secrets.toml"
 runs_dir = "runs"
+repo_cache_dir = "repo_cache"
 dbt_driver = "ODBC Driver 17 for SQL Server"
 keep_artifacts = ["logs", "project", "data"]
 ```
@@ -248,6 +286,7 @@ keep_artifacts = ["logs", "project", "data"]
 |-------|---------|-------------|
 | `secrets_dir` | (none) | Path to secrets TOML file |
 | `runs_dir` | `"runs"` | Directory for run snapshots |
+| `repo_cache_dir` | `"repo_cache"` | Directory for persistent git repository clones |
 | `dbt_driver` | `"ODBC Driver 17 for SQL Server"` | ODBC driver for dbt profiles |
 | `keep_artifacts` | `["logs", "project", "data"]` | Which run subdirs to keep after completion |
 

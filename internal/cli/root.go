@@ -3,6 +3,7 @@ package cli
 import (
 	"fmt"
 	"os"
+	"path/filepath"
 
 	"github.com/druarnfield/pit/internal/config"
 	"github.com/spf13/cobra"
@@ -65,6 +66,14 @@ func resolveRunsDir() string {
 		return workspaceCfg.RunsDir
 	}
 	return "runs"
+}
+
+// resolveRepoCacheDir returns the git repo cache directory from workspace config or the default.
+func resolveRepoCacheDir() string {
+	if workspaceCfg != nil && workspaceCfg.RepoCacheDir != "" {
+		return workspaceCfg.RepoCacheDir
+	}
+	return filepath.Join(projectDir, "repo_cache")
 }
 
 // resolveDBTDriver returns the dbt ODBC driver from workspace config or the default.

@@ -49,6 +49,8 @@ type DAGConfig struct {
 	Timeout       Duration        `toml:"timeout"`
 	Requires      []string        `toml:"requires"`
 	KeepArtifacts []string        `toml:"keep_artifacts"`
+	GitURL        string          `toml:"git_url"`
+	GitRef        string          `toml:"git_ref"`
 	SQL           SQLConfig       `toml:"sql"`
 	FTPWatch      *FTPWatchConfig `toml:"ftp_watch"`
 	DBT           *DBTConfig      `toml:"dbt"`

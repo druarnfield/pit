@@ -42,6 +42,14 @@ func Validate(cfg *config.ProjectConfig, projectDir string) []*ValidationError {
 		dagName = "(unnamed)"
 	}
 
+	// git_url and git_ref must both be set or both absent
+	if (cfg.DAG.GitURL == "") != (cfg.DAG.GitRef == "") {
+		errs = append(errs, &ValidationError{
+			DAG:     dagName,
+			Message: "dag.git_url and dag.git_ref must both be set or both absent",
+		})
+	}
+
 	// Valid overlap value
 	if !validOverlap[cfg.DAG.Overlap] {
 		errs = append(errs, &ValidationError{
@@ -86,7 +94,9 @@ func Validate(cfg *config.ProjectConfig, projectDir string) []*ValidationError {
 					Message: "dbt task requires a non-empty script (dbt command, e.g. \"run --select staging\")",
 				})
 			}
-		} else if t.Script != "" {
+		} else if t.Script != "" && cfg.DAG.GitURL == "" {
+			// Script existence can only be verified for local projects.
+			// For git-backed projects the source is not on disk until run time.
 			scriptPath := filepath.Join(projectDir, t.Script)
 			if _, err := os.Stat(scriptPath); os.IsNotExist(err) {
 				errs = append(errs, &ValidationError{
@@ -125,7 +135,7 @@ func Validate(cfg *config.ProjectConfig, projectDir string) []*ValidationError {
 
 	// Validate dbt config
 	if cfg.DAG.DBT != nil {
-		errs = append(errs, validateDBT(cfg.DAG.DBT, dagName, projectDir)...)
+		errs = append(errs, validateDBT(cfg.DAG.DBT, dagName, projectDir, cfg.DAG.GitURL != "")...)
 	}
 
 	// Cycle detection via Kahn's algorithm
@@ -171,7 +181,9 @@ func validateFTPWatch(fw *config.FTPWatchConfig, dagName string) []*ValidationEr
 }
 
 // validateDBT checks required fields for dbt config.
-func validateDBT(dbt *config.DBTConfig, dagName string, projectDir string) []*ValidationError {
+// gitBacked indicates that the project source lives in a remote git repo and
+// is not present on local disk at validation time, so filesystem checks are skipped.
+func validateDBT(dbt *config.DBTConfig, dagName string, projectDir string, gitBacked bool) []*ValidationError {
 	var errs []*ValidationError
 
 	if dbt.Version == "" {
@@ -182,7 +194,7 @@ func validateDBT(dbt *config.DBTConfig, dagName string, projectDir string) []*Va
 	}
 	if dbt.ProjectDir == "" {
 		errs = append(errs, &ValidationError{DAG: dagName, Message: "dbt.project_dir is required"})
-	} else {
+	} else if !gitBacked {
 		dbtDir := filepath.Join(projectDir, dbt.ProjectDir)
 		info, err := os.Stat(dbtDir)
 		if err != nil {

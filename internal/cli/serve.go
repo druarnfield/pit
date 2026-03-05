@@ -21,6 +21,7 @@ func newServeCmd() *cobra.Command {
 			}
 			srv, err := serve.NewServer(projectDir, secretsPath, verbose, serve.Options{
 				RunsDir:            resolveRunsDir(),
+				RepoCacheDir:       resolveRepoCacheDir(),
 				DBTDriver:          resolveDBTDriver(),
 				WorkspaceArtifacts: wsArtifacts,
 			})

@@ -34,6 +34,7 @@ type Server struct {
 // Options holds workspace-level settings passed from the CLI layer.
 type Options struct {
 	RunsDir            string
+	RepoCacheDir       string
 	DBTDriver          string
 	WorkspaceArtifacts []string // workspace-level keep_artifacts (nil = use default)
 }
@@ -64,10 +65,11 @@ func NewServer(rootDir, secretsPath string, verbose bool, srvOpts Options) (*Ser
 		ftpConfigs: make(map[string]*config.FTPWatchConfig),
 		eventCh:    make(chan trigger.Event, 64),
 		opts: engine.ExecuteOpts{
-			RunsDir:     srvOpts.RunsDir,
-			Verbose:     verbose,
-			SecretsPath: secretsPath,
-			DBTDriver:   srvOpts.DBTDriver,
+			RunsDir:      srvOpts.RunsDir,
+			RepoCacheDir: srvOpts.RepoCacheDir,
+			Verbose:      verbose,
+			SecretsPath:  secretsPath,
+			DBTDriver:    srvOpts.DBTDriver,
 		},
 		workspaceArtifacts: srvOpts.WorkspaceArtifacts,
 		activeRuns:         make(map[string]bool),

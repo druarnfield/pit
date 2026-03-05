@@ -25,6 +25,7 @@ const DefaultDBTDriver = "ODBC Driver 17 for SQL Server"
 type PitConfig struct {
 	SecretsDir    string   `toml:"secrets_dir"`
 	RunsDir       string   `toml:"runs_dir"`
+	RepoCacheDir  string   `toml:"repo_cache_dir"`
 	DBTDriver     string   `toml:"dbt_driver"`
 	KeepArtifacts []string `toml:"keep_artifacts"`
 }
@@ -53,6 +54,9 @@ func LoadPitConfig(rootDir string) (*PitConfig, error) {
 	}
 	if cfg.RunsDir != "" && !filepath.IsAbs(cfg.RunsDir) {
 		cfg.RunsDir = filepath.Join(rootDir, cfg.RunsDir)
+	}
+	if cfg.RepoCacheDir != "" && !filepath.IsAbs(cfg.RepoCacheDir) {
+		cfg.RepoCacheDir = filepath.Join(rootDir, cfg.RepoCacheDir)
 	}
 
 	// Validate keep_artifacts entries

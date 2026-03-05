@@ -28,6 +28,7 @@ type SecretsResolver interface {
 type Run struct {
 	ID          string
 	DAGName     string
+	ProjectDir  string     // source directory: local project dir or git repo cache
 	SnapshotDir string
 	LogDir      string
 	DataDir     string

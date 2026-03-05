@@ -57,6 +57,7 @@ func newRunCmd() *cobra.Command {
 
 			opts := engine.ExecuteOpts{
 				RunsDir:       resolveRunsDir(),
+				RepoCacheDir:  resolveRepoCacheDir(),
 				TaskName:      taskName,
 				Verbose:       verbose,
 				SecretsPath:   secretsPath,

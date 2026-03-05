@@ -11,6 +11,7 @@ import (
 	"time"
 
 	"github.com/druarnfield/pit/internal/config"
+	"github.com/druarnfield/pit/internal/gitrepo"
 	"github.com/druarnfield/pit/internal/loader"
 	"github.com/druarnfield/pit/internal/runner"
 	"github.com/druarnfield/pit/internal/sdk"
@@ -20,6 +21,7 @@ import (
 // ExecuteOpts configures a DAG execution.
 type ExecuteOpts struct {
 	RunsDir       string   // directory for run snapshots (default: "runs")
+	RepoCacheDir  string   // directory for persistent git clones (default: "repo_cache")
 	TaskName      string   // if set, only run this single task
 	Verbose       bool     // stream task output to stdout
 	Concurrency   int      // max parallel tasks (0 = unlimited)
@@ -37,8 +39,24 @@ func Execute(ctx context.Context, cfg *config.ProjectConfig, opts ExecuteOpts) (
 
 	runID := GenerateRunID(cfg.DAG.Name)
 
+	// Resolve the project source directory. For git-backed projects the repo
+	// is cloned / updated in a persistent cache and that cache becomes the
+	// source for the run snapshot. For local projects cfg.Dir() is used as
+	// today, with no behaviour change.
+	projectDir := cfg.Dir()
+	if cfg.DAG.GitURL != "" {
+		if opts.RepoCacheDir == "" {
+			opts.RepoCacheDir = "repo_cache"
+		}
+		cacheDir := filepath.Join(opts.RepoCacheDir, cfg.DAG.Name)
+		if err := gitrepo.Prepare(cfg.DAG.GitURL, cfg.DAG.GitRef, cacheDir); err != nil {
+			return nil, fmt.Errorf("preparing git repo: %w", err)
+		}
+		projectDir = cacheDir
+	}
+
 	// Snapshot the project
-	snapshotDir, logDir, dataDir, err := Snapshot(cfg.Dir(), opts.RunsDir, runID)
+	snapshotDir, logDir, dataDir, err := Snapshot(projectDir, opts.RunsDir, runID)
 	if err != nil {
 		return nil, fmt.Errorf("snapshot: %w", err)
 	}
@@ -87,6 +105,7 @@ func Execute(ctx context.Context, cfg *config.ProjectConfig, opts ExecuteOpts) (
 	run := &Run{
 		ID:          runID,
 		DAGName:     cfg.DAG.Name,
+		ProjectDir:  projectDir,
 		SnapshotDir: snapshotDir,
 		LogDir:      logDir,
 		DataDir:     dataDir,
@@ -408,7 +427,7 @@ func executeTask(ctx context.Context, ti *TaskInstance, run *Run, cfg *config.Pr
 	rc := runner.RunContext{
 		ScriptPath:      scriptPath,
 		SnapshotDir:     run.SnapshotDir,
-		OrigProjectDir:  cfg.Dir(),
+		OrigProjectDir:  run.ProjectDir,
 		Env:             env,
 		SecretsResolver: run.SecretsResolver,
 		DAGName:         run.DAGName,

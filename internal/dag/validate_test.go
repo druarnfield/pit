@@ -449,6 +449,87 @@ func TestValidate_DBT_TaskWithScript(t *testing.T) {
 	}
 }
 
+func TestValidate_GitURL_SkipsScriptCheck(t *testing.T) {
+	// Script path does not exist on disk — but git_url is set, so the check
+	// should be skipped and no error reported.
+	cfg := &config.ProjectConfig{
+		DAG: config.DAGConfig{
+			Name:   "test",
+			GitURL: "git@github.com:example/repo.git",
+			GitRef: "main",
+		},
+		Tasks: []config.TaskConfig{
+			{Name: "extract", Script: "tasks/nonexistent.py"},
+		},
+	}
+	errs := Validate(cfg, t.TempDir())
+	for _, e := range errs {
+		if strings.Contains(e.Error(), "not found") {
+			t.Errorf("Validate() should skip script existence check for git-backed project, got: %s", e)
+		}
+	}
+}
+
+func TestValidate_GitURL_PairRequired(t *testing.T) {
+	tests := []struct {
+		name   string
+		gitURL string
+		gitRef string
+	}{
+		{name: "url without ref", gitURL: "git@github.com:example/repo.git", gitRef: ""},
+		{name: "ref without url", gitURL: "", gitRef: "main"},
+	}
+
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			cfg := &config.ProjectConfig{
+				DAG: config.DAGConfig{
+					Name:   "test",
+					GitURL: tt.gitURL,
+					GitRef: tt.gitRef,
+				},
+			}
+			errs := Validate(cfg, t.TempDir())
+			found := false
+			for _, e := range errs {
+				if strings.Contains(e.Error(), "git_url") && strings.Contains(e.Error(), "git_ref") {
+					found = true
+					break
+				}
+			}
+			if !found {
+				t.Errorf("Validate() expected error about git_url/git_ref pair, got: %v", errs)
+			}
+		})
+	}
+}
+
+func TestValidate_GitURL_DBTSkipsDirCheck(t *testing.T) {
+	// dbt.project_dir does not exist on disk — git_url is set so the
+	// filesystem check should be skipped.
+	cfg := &config.ProjectConfig{
+		DAG: config.DAGConfig{
+			Name:   "test",
+			GitURL: "git@github.com:example/repo.git",
+			GitRef: "main",
+			DBT: &config.DBTConfig{
+				Version:    "1.9.1",
+				Adapter:    "dbt-sqlserver",
+				ProjectDir: "dbt_repo_not_on_disk",
+			},
+		},
+		Tasks: []config.TaskConfig{
+			{Name: "run_models", Script: "run", Runner: "dbt"},
+		},
+	}
+	errs := Validate(cfg, t.TempDir())
+	for _, e := range errs {
+		if strings.Contains(e.Error(), "not found") || strings.Contains(e.Error(), "not a directory") {
+			t.Errorf("Validate() should skip dbt.project_dir check for git-backed project, got: %s", e)
+		}
+	}
+}
+
 // loadTestdata loads a ProjectConfig from testdata/<name>/pit.toml.
 func loadTestdata(t *testing.T, name string) *config.ProjectConfig {
 	t.Helper()

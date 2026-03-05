@@ -35,9 +35,10 @@ pit run my_pipeline                  # run entire DAG
 pit run my_pipeline/extract          # run a single task
 pit run my_pipeline --verbose        # stream task output to stdout
 
-# Start the scheduler (cron + FTP watch triggers)
+# Start the scheduler (cron, FTP watch, and webhook triggers)
 pit serve                            # runs until SIGINT/SIGTERM
 pit serve --verbose                  # with live task output
+pit serve --port 8080                # webhook listener on custom port (default 9090)
 
 # View logs from past runs
 pit logs my_pipeline                 # latest run, all tasks
@@ -118,6 +119,43 @@ type = "table"
 location = "warehouse.staging.claims"
 ```
 
+### Git-backed Projects
+
+A DAG can pull its source from a remote git repository instead of a local directory. Add `git_url` and `git_ref` to `[dag]`:
+
+```toml
+[dag]
+name = "claims_pipeline"
+git_url = "git@github.com:company/claims.git"
+git_ref = "main"            # branch, tag, or commit SHA
+schedule = "0 6 * * *"
+
+[[tasks]]
+name = "extract"
+script = "tasks/extract.py"   # path relative to repo root
+```
+
+Both fields must be set together (or both omitted). The `pit.toml` itself stays local in `projects/<name>/`; only the task source files come from the remote repo.
+
+**How it works:**
+
+1. Before each run Pit clones the repo (or fetches updates if already cloned) into `repo_cache/<dag_name>/`.
+2. The cached clone is snapshotted into the run directory exactly like a local project.
+3. Python venv (`uv`) is resolved against the persistent cache, so dependencies are only reinstalled when the lockfile changes.
+
+Pit shells out to the system `git` binary, inheriting your SSH agent and credential helper configuration automatically.
+
+**Directory layout with git-backed projects:**
+
+```
+<root>/
+├── projects/<name>/pit.toml    ← DAG definition (local)
+├── repo_cache/<name>/          ← persistent clone (managed by pit)
+└── runs/<run-id>/              ← snapshot + logs (unchanged)
+```
+
+Validation skips local filesystem checks (script existence, `dbt.project_dir`) for git-backed projects since the source is not on disk until run time. For git-backed DAGs, `dbt.project_dir` is also optional — if omitted it defaults to the repo root.
+
 ### Task Runners
 
 Runner is determined by file extension, with an optional override:
@@ -147,7 +185,7 @@ runner = "$ node"              # runs: node tasks/transform.js
 | `pit validate` | Validate all `pit.toml` files (cycles, missing deps, script paths) |
 | `pit init <name>` | Scaffold a new project (`--type python\|sql\|shell\|dbt`) |
 | `pit run <dag>[/<task>]` | Execute a DAG or single task (`--verbose` for live output) |
-| `pit serve` | Run the scheduler with cron and FTP watch triggers |
+| `pit serve [--port N]` | Run the scheduler with cron, FTP watch, and webhook triggers (webhook port default: 9090) |
 | `pit logs <dag>[/<task>]` | View task logs (`--list` for runs, `--run-id` for specific run) |
 | `pit outputs` | List declared outputs (`--project`, `--type`, `--location` filters) |
 
@@ -233,6 +271,42 @@ Legacy configuration using `host`, `user`, and `password_secret` as separate fie
 
 Both trigger types can be combined on the same DAG.
 
+### Webhook Triggers
+
+Trigger a DAG run via an inbound HTTP POST request. Useful for CI/CD pipelines, GitHub Actions, or any system that can send a webhook.
+
+```toml
+[dag]
+name = "deploy_pipeline"
+overlap = "skip"
+
+[dag.webhook]
+token_secret = "deploy_webhook_token"   # plain secret name for auth token
+```
+
+Add the token to your secrets file:
+
+```toml
+[global]
+deploy_webhook_token = "supersecret123"
+```
+
+Start the server with `--secrets` (required for webhook token resolution):
+
+```bash
+pit serve --secrets secrets.toml --port 9090
+```
+
+Trigger a run:
+
+```bash
+curl -X POST http://localhost:9090/webhook/deploy_pipeline \
+  -H "Authorization: Bearer supersecret123"
+# → 202 Accepted
+```
+
+The webhook listener only starts if at least one DAG has `[dag.webhook]` configured. All DAGs with a webhook share the same port; the URL path routes by DAG name.
+
 ## Workspace Configuration
 
 Create a `pit_config.toml` in the project root to set workspace-level defaults:
@@ -240,6 +314,7 @@ Create a `pit_config.toml` in the project root to set workspace-level defaults:
 ```toml
 secrets_dir = "secrets/secrets.toml"
 runs_dir = "runs"
+repo_cache_dir = "repo_cache"
 dbt_driver = "ODBC Driver 17 for SQL Server"
 keep_artifacts = ["logs", "project", "data"]
 ```
@@ -248,6 +323,7 @@ keep_artifacts = ["logs", "project", "data"]
 |-------|---------|-------------|
 | `secrets_dir` | (none) | Path to secrets TOML file |
 | `runs_dir` | `"runs"` | Directory for run snapshots |
+| `repo_cache_dir` | `"repo_cache"` | Directory for persistent git repository clones |
 | `dbt_driver` | `"ODBC Driver 17 for SQL Server"` | ODBC driver for dbt profiles |
 | `keep_artifacts` | `["logs", "project", "data"]` | Which run subdirs to keep after completion |
 
@@ -403,7 +479,7 @@ timeout = "2h"
 version = "1.9.1"              # dbt-core version
 adapter = "dbt-sqlserver"       # pip package name for the adapter
 extra_deps = ["dbt-utils"]      # additional pip packages (optional)
-project_dir = "dbt_repo"        # relative path to dbt project root
+project_dir = "dbt_repo"        # relative path to dbt project root (optional for git-backed; defaults to repo root)
 profile = "analytics"           # profile name in profiles.yml (default: dag name)
 target = "prod"                 # target name (default: "prod")
 connection = "analytics_db"     # structured secret name for db credentials
@@ -530,7 +606,7 @@ The following features are planned but not yet implemented. See `pit-architectur
 ### Mid-term
 
 - **SQLite metadata store** — Persistent run history, task instance tracking, environment hashes. WAL mode for concurrent access.
-- **Notifications** — Email on DAG failure via SMTP connector, webhook support for Slack/Teams.
+- **Notifications** — Email on DAG failure via SMTP connector, outbound webhook support for Slack/Teams.
 - **Additional Go connectors** — SMTP, HTTP, Minio/S3 — exposed via SDK socket.
 
 ### Long-term

@@ -35,9 +35,10 @@ pit run my_pipeline                  # run entire DAG
 pit run my_pipeline/extract          # run a single task
 pit run my_pipeline --verbose        # stream task output to stdout
 
-# Start the scheduler (cron + FTP watch triggers)
+# Start the scheduler (cron, FTP watch, and webhook triggers)
 pit serve                            # runs until SIGINT/SIGTERM
 pit serve --verbose                  # with live task output
+pit serve --port 8080                # webhook listener on custom port (default 9090)
 
 # View logs from past runs
 pit logs my_pipeline                 # latest run, all tasks
@@ -184,7 +185,7 @@ runner = "$ node"              # runs: node tasks/transform.js
 | `pit validate` | Validate all `pit.toml` files (cycles, missing deps, script paths) |
 | `pit init <name>` | Scaffold a new project (`--type python\|sql\|shell\|dbt`) |
 | `pit run <dag>[/<task>]` | Execute a DAG or single task (`--verbose` for live output) |
-| `pit serve` | Run the scheduler with cron and FTP watch triggers |
+| `pit serve [--port N]` | Run the scheduler with cron, FTP watch, and webhook triggers (webhook port default: 9090) |
 | `pit logs <dag>[/<task>]` | View task logs (`--list` for runs, `--run-id` for specific run) |
 | `pit outputs` | List declared outputs (`--project`, `--type`, `--location` filters) |
 
@@ -269,6 +270,42 @@ password = "secret123"
 Legacy configuration using `host`, `user`, and `password_secret` as separate fields is still supported for backward compatibility.
 
 Both trigger types can be combined on the same DAG.
+
+### Webhook Triggers
+
+Trigger a DAG run via an inbound HTTP POST request. Useful for CI/CD pipelines, GitHub Actions, or any system that can send a webhook.
+
+```toml
+[dag]
+name = "deploy_pipeline"
+overlap = "skip"
+
+[dag.webhook]
+token_secret = "deploy_webhook_token"   # plain secret name for auth token
+```
+
+Add the token to your secrets file:
+
+```toml
+[global]
+deploy_webhook_token = "supersecret123"
+```
+
+Start the server with `--secrets` (required for webhook token resolution):
+
+```bash
+pit serve --secrets secrets.toml --port 9090
+```
+
+Trigger a run:
+
+```bash
+curl -X POST http://localhost:9090/webhook/deploy_pipeline \
+  -H "Authorization: Bearer supersecret123"
+# → 202 Accepted
+```
+
+The webhook listener only starts if at least one DAG has `[dag.webhook]` configured. All DAGs with a webhook share the same port; the URL path routes by DAG name.
 
 ## Workspace Configuration
 
@@ -569,7 +606,7 @@ The following features are planned but not yet implemented. See `pit-architectur
 ### Mid-term
 
 - **SQLite metadata store** — Persistent run history, task instance tracking, environment hashes. WAL mode for concurrent access.
-- **Notifications** — Email on DAG failure via SMTP connector, webhook support for Slack/Teams.
+- **Notifications** — Email on DAG failure via SMTP connector, outbound webhook support for Slack/Teams.
 - **Additional Go connectors** — SMTP, HTTP, Minio/S3 — exposed via SDK socket.
 
 ### Long-term

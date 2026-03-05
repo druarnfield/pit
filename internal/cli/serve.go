@@ -10,10 +10,12 @@ import (
 )
 
 func newServeCmd() *cobra.Command {
-	return &cobra.Command{
+	var port int
+
+	cmd := &cobra.Command{
 		Use:   "serve",
-		Short: "Run the scheduler (cron and FTP watch triggers)",
-		Long:  "Start pit in serve mode. Monitors all projects for scheduled triggers and FTP file watches, executing DAGs automatically.",
+		Short: "Run the scheduler (cron, FTP watch, and webhook triggers)",
+		Long:  "Start pit in serve mode. Monitors all projects for scheduled triggers, FTP file watches, and inbound webhooks, executing DAGs automatically.",
 		RunE: func(cmd *cobra.Command, args []string) error {
 			var wsArtifacts []string
 			if workspaceCfg != nil {
@@ -24,6 +26,7 @@ func newServeCmd() *cobra.Command {
 				RepoCacheDir:       resolveRepoCacheDir(),
 				DBTDriver:          resolveDBTDriver(),
 				WorkspaceArtifacts: wsArtifacts,
+				WebhookPort:        port,
 			})
 			if err != nil {
 				return err
@@ -35,4 +38,7 @@ func newServeCmd() *cobra.Command {
 			return srv.Start(ctx)
 		},
 	}
+
+	cmd.Flags().IntVar(&port, "port", 9090, "port for inbound webhook HTTP listener")
+	return cmd
 }

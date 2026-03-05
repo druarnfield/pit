@@ -53,6 +53,7 @@ type DAGConfig struct {
 	GitRef        string          `toml:"git_ref"`
 	SQL           SQLConfig       `toml:"sql"`
 	FTPWatch      *FTPWatchConfig `toml:"ftp_watch"`
+	Webhook       *WebhookConfig  `toml:"webhook"`
 	DBT           *DBTConfig      `toml:"dbt"`
 }
 
@@ -66,6 +67,11 @@ type DBTConfig struct {
 	Target     string   `toml:"target"`      // target name (default: "prod")
 	Threads    string   `toml:"threads"`     // number of threads to run with
 	Connection string   `toml:"connection"`  // structured secret name for db credentials
+}
+
+// WebhookConfig defines an inbound HTTP webhook trigger for a DAG.
+type WebhookConfig struct {
+	TokenSecret string `toml:"token_secret"` // plain secret name for auth token
 }
 
 // FTPWatchConfig defines an FTP file watch trigger for a DAG.

@@ -2,10 +2,13 @@ package serve
 
 import (
 	"context"
+	"crypto/subtle"
 	"fmt"
 	"log"
+	"net/http"
 	"os"
 	"path/filepath"
+	"strings"
 	"sync"
 
 	"github.com/druarnfield/pit/internal/config"
@@ -22,7 +25,9 @@ type Server struct {
 	configs    map[string]*config.ProjectConfig
 	store      *secrets.Store
 	triggers   []trigger.Trigger
-	ftpConfigs map[string]*config.FTPWatchConfig
+	ftpConfigs    map[string]*config.FTPWatchConfig
+	webhookTokens map[string]string // dagName → resolved bearer token
+	webhookPort   int
 	eventCh            chan trigger.Event
 	opts               engine.ExecuteOpts
 	workspaceArtifacts []string // workspace-level keep_artifacts (nil = use default)
@@ -37,6 +42,7 @@ type Options struct {
 	RepoCacheDir       string
 	DBTDriver          string
 	WorkspaceArtifacts []string // workspace-level keep_artifacts (nil = use default)
+	WebhookPort        int      // port for inbound webhook HTTP server (0 = use default 9090)
 }
 
 // NewServer discovers projects, validates them, and registers triggers.
@@ -58,12 +64,19 @@ func NewServer(rootDir, secretsPath string, verbose bool, srvOpts Options) (*Ser
 		}
 	}
 
+	webhookPort := srvOpts.WebhookPort
+	if webhookPort == 0 {
+		webhookPort = 9090
+	}
+
 	s := &Server{
-		rootDir:    rootDir,
-		configs:    configs,
-		store:      store,
-		ftpConfigs: make(map[string]*config.FTPWatchConfig),
-		eventCh:    make(chan trigger.Event, 64),
+		rootDir:       rootDir,
+		configs:       configs,
+		store:         store,
+		ftpConfigs:    make(map[string]*config.FTPWatchConfig),
+		webhookTokens: make(map[string]string),
+		webhookPort:   webhookPort,
+		eventCh:       make(chan trigger.Event, 64),
 		opts: engine.ExecuteOpts{
 			RunsDir:      srvOpts.RunsDir,
 			RepoCacheDir: srvOpts.RepoCacheDir,
@@ -104,10 +117,21 @@ func NewServer(rootDir, secretsPath string, verbose bool, srvOpts Options) (*Ser
 			s.triggers = append(s.triggers, ft)
 			s.ftpConfigs[dagName] = cfg.DAG.FTPWatch
 		}
+
+		if cfg.DAG.Webhook != nil {
+			if store == nil {
+				return nil, fmt.Errorf("DAG %q: webhook requires a secrets file (--secrets)", dagName)
+			}
+			token, err := store.Resolve(dagName, cfg.DAG.Webhook.TokenSecret)
+			if err != nil {
+				return nil, fmt.Errorf("DAG %q: resolving webhook token: %w", dagName, err)
+			}
+			s.webhookTokens[dagName] = token
+		}
 	}
 
-	if len(s.triggers) == 0 {
-		return nil, fmt.Errorf("no triggers registered (set schedule or ftp_watch in at least one DAG)")
+	if len(s.triggers) == 0 && len(s.webhookTokens) == 0 {
+		return nil, fmt.Errorf("no triggers registered (set schedule, ftp_watch, or webhook in at least one DAG)")
 	}
 
 	return s, nil
@@ -135,6 +159,30 @@ func (s *Server) Start(ctx context.Context) error {
 		}(t)
 	}
 
+	// Launch webhook HTTP server if any DAGs have webhooks configured
+	if len(s.webhookTokens) > 0 {
+		mux := http.NewServeMux()
+		mux.HandleFunc("/webhook/", s.webhookHandler)
+		httpSrv := &http.Server{
+			Addr:    fmt.Sprintf(":%d", s.webhookPort),
+			Handler: mux,
+		}
+		triggerWg.Add(1)
+		go func() {
+			defer triggerWg.Done()
+			log.Printf("pit serve: webhook listener on :%d (%d DAG(s))", s.webhookPort, len(s.webhookTokens))
+			if err := httpSrv.ListenAndServe(); err != nil && err != http.ErrServerClosed {
+				log.Printf("webhook server error: %v", err)
+			}
+		}()
+		go func() {
+			<-triggerCtx.Done()
+			if err := httpSrv.Shutdown(context.Background()); err != nil {
+				log.Printf("webhook server shutdown error: %v", err)
+			}
+		}()
+	}
+
 	// Process events
 	var runWg sync.WaitGroup
 	go func() {
@@ -160,6 +208,43 @@ func (s *Server) Start(ctx context.Context) error {
 	runWg.Wait()
 	log.Println("pit serve: stopped")
 	return nil
+}
+
+// webhookHandler handles inbound POST /webhook/{dag-name} requests.
+func (s *Server) webhookHandler(w http.ResponseWriter, r *http.Request) {
+	if r.Method != http.MethodPost {
+		http.Error(w, "method not allowed", http.StatusMethodNotAllowed)
+		return
+	}
+
+	dagName := strings.TrimPrefix(r.URL.Path, "/webhook/")
+	if dagName == "" {
+		http.Error(w, "not found", http.StatusNotFound)
+		return
+	}
+
+	expected, ok := s.webhookTokens[dagName]
+	if !ok {
+		http.Error(w, "not found", http.StatusNotFound)
+		return
+	}
+
+	authHeader := r.Header.Get("Authorization")
+	var provided string
+	if strings.HasPrefix(authHeader, "Bearer ") {
+		provided = authHeader[len("Bearer "):]
+	}
+	if subtle.ConstantTimeCompare([]byte(provided), []byte(expected)) != 1 {
+		http.Error(w, "unauthorized", http.StatusUnauthorized)
+		return
+	}
+
+	select {
+	case s.eventCh <- trigger.Event{DAGName: dagName, Source: "webhook"}:
+		w.WriteHeader(http.StatusAccepted)
+	default:
+		http.Error(w, "server busy", http.StatusServiceUnavailable)
+	}
 }
 
 func (s *Server) handleEvent(ctx context.Context, ev trigger.Event, wg *sync.WaitGroup) {

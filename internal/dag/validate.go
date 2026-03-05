@@ -123,6 +123,11 @@ func Validate(cfg *config.ProjectConfig, projectDir string) []*ValidationError {
 		errs = append(errs, validateFTPWatch(cfg.DAG.FTPWatch, dagName)...)
 	}
 
+	// Validate webhook config
+	if cfg.DAG.Webhook != nil {
+		errs = append(errs, validateWebhook(cfg.DAG.Webhook, dagName)...)
+	}
+
 	// Validate keep_artifacts
 	for _, a := range cfg.DAG.KeepArtifacts {
 		if !config.ValidArtifacts[a] {
@@ -209,6 +214,14 @@ func validateDBT(dbt *config.DBTConfig, dagName string, projectDir string, gitBa
 	}
 
 	return errs
+}
+
+// validateWebhook checks required fields for webhook config.
+func validateWebhook(wh *config.WebhookConfig, dagName string) []*ValidationError {
+	if wh.TokenSecret == "" {
+		return []*ValidationError{{DAG: dagName, Message: "webhook.token_secret is required"}}
+	}
+	return nil
 }
 
 // detectCycles uses Kahn's algorithm for topological sort.

@@ -529,6 +529,46 @@ func TestValidate_GitURL_DBTSkipsDirCheck(t *testing.T) {
 	}
 }
 
+func TestValidate_Webhook_MissingTokenSecret(t *testing.T) {
+	cfg := &config.ProjectConfig{
+		DAG: config.DAGConfig{
+			Name: "test",
+			Webhook: &config.WebhookConfig{
+				// TokenSecret intentionally empty
+			},
+		},
+	}
+	errs := Validate(cfg, t.TempDir())
+
+	found := false
+	for _, e := range errs {
+		if strings.Contains(e.Error(), "webhook.token_secret") {
+			found = true
+			break
+		}
+	}
+	if !found {
+		t.Errorf("Validate() missing error for webhook.token_secret, got: %v", errs)
+	}
+}
+
+func TestValidate_Webhook_ValidConfig(t *testing.T) {
+	cfg := &config.ProjectConfig{
+		DAG: config.DAGConfig{
+			Name: "test",
+			Webhook: &config.WebhookConfig{
+				TokenSecret: "my_token",
+			},
+		},
+	}
+	errs := Validate(cfg, t.TempDir())
+	for _, e := range errs {
+		if strings.Contains(e.Error(), "webhook") {
+			t.Errorf("Validate() unexpected webhook error: %s", e)
+		}
+	}
+}
+
 func TestValidate_GitURL_DBTEmptyProjectDir(t *testing.T) {
 	// project_dir is optional for git-backed DAGs; empty means use repo root.
 	cfg := &config.ProjectConfig{

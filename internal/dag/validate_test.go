@@ -350,7 +350,6 @@ func TestValidate_DBT_MissingFields(t *testing.T) {
 	requiredFields := []string{
 		"dbt.version",
 		"dbt.adapter",
-		"dbt.project_dir",
 	}
 	for _, field := range requiredFields {
 		found := false
@@ -526,6 +525,31 @@ func TestValidate_GitURL_DBTSkipsDirCheck(t *testing.T) {
 	for _, e := range errs {
 		if strings.Contains(e.Error(), "not found") || strings.Contains(e.Error(), "not a directory") {
 			t.Errorf("Validate() should skip dbt.project_dir check for git-backed project, got: %s", e)
+		}
+	}
+}
+
+func TestValidate_GitURL_DBTEmptyProjectDir(t *testing.T) {
+	// project_dir is optional for git-backed DAGs; empty means use repo root.
+	cfg := &config.ProjectConfig{
+		DAG: config.DAGConfig{
+			Name:   "test",
+			GitURL: "git@github.com:example/repo.git",
+			GitRef: "main",
+			DBT: &config.DBTConfig{
+				Version: "1.9.1",
+				Adapter: "dbt-sqlserver",
+				// ProjectDir intentionally empty
+			},
+		},
+		Tasks: []config.TaskConfig{
+			{Name: "run_models", Script: "run", Runner: "dbt"},
+		},
+	}
+	errs := Validate(cfg, t.TempDir())
+	for _, e := range errs {
+		if strings.Contains(e.Error(), "project_dir") {
+			t.Errorf("Validate() unexpected project_dir error for git-backed DAG: %s", e)
 		}
 	}
 }

@@ -192,9 +192,7 @@ func validateDBT(dbt *config.DBTConfig, dagName string, projectDir string, gitBa
 	if dbt.Adapter == "" {
 		errs = append(errs, &ValidationError{DAG: dagName, Message: "dbt.adapter is required"})
 	}
-	if dbt.ProjectDir == "" {
-		errs = append(errs, &ValidationError{DAG: dagName, Message: "dbt.project_dir is required"})
-	} else if !gitBacked {
+	if dbt.ProjectDir != "" && !gitBacked {
 		dbtDir := filepath.Join(projectDir, dbt.ProjectDir)
 		info, err := os.Stat(dbtDir)
 		if err != nil {

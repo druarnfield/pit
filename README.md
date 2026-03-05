@@ -153,7 +153,7 @@ Pit shells out to the system `git` binary, inheriting your SSH agent and credent
 └── runs/<run-id>/              ← snapshot + logs (unchanged)
 ```
 
-Validation skips local filesystem checks (script existence, `dbt.project_dir`) for git-backed projects since the source is not on disk until run time.
+Validation skips local filesystem checks (script existence, `dbt.project_dir`) for git-backed projects since the source is not on disk until run time. For git-backed DAGs, `dbt.project_dir` is also optional — if omitted it defaults to the repo root.
 
 ### Task Runners
 
@@ -442,7 +442,7 @@ timeout = "2h"
 version = "1.9.1"              # dbt-core version
 adapter = "dbt-sqlserver"       # pip package name for the adapter
 extra_deps = ["dbt-utils"]      # additional pip packages (optional)
-project_dir = "dbt_repo"        # relative path to dbt project root
+project_dir = "dbt_repo"        # relative path to dbt project root (optional for git-backed; defaults to repo root)
 profile = "analytics"           # profile name in profiles.yml (default: dag name)
 target = "prod"                 # target name (default: "prod")
 connection = "analytics_db"     # structured secret name for db credentials

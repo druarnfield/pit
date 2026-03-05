@@ -85,15 +85,21 @@ func Execute(ctx context.Context, cfg *config.ProjectConfig, opts ExecuteOpts) (
 
 	// Build Run from config
 	run := &Run{
-		ID:              runID,
-		DAGName:         cfg.DAG.Name,
-		SnapshotDir:     snapshotDir,
-		LogDir:          logDir,
-		DataDir:         dataDir,
-		Status:          StatusRunning,
-		StartedAt:       time.Now(),
-		SocketPath:      socketPath,
-		SecretsResolver: store,
+		ID:          runID,
+		DAGName:     cfg.DAG.Name,
+		SnapshotDir: snapshotDir,
+		LogDir:      logDir,
+		DataDir:     dataDir,
+		Status:      StatusRunning,
+		StartedAt:   time.Now(),
+		SocketPath:  socketPath,
+	}
+	// Only assign when store is non-nil. Assigning a typed nil *secrets.Store
+	// directly to the SecretsResolver interface produces a non-nil interface
+	// value (it carries the type but a nil pointer), which defeats the nil
+	// guard in executeTask and causes a nil-pointer panic in ResolveField.
+	if store != nil {
+		run.SecretsResolver = store
 	}
 
 	for _, tc := range cfg.Tasks {

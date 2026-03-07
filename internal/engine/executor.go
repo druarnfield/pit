@@ -29,6 +29,7 @@ type ExecuteOpts struct {
 	Verbose       bool     // stream task output to stdout
 	Concurrency   int      // max parallel tasks (0 = unlimited)
 	SecretsPath   string   // path to secrets.toml (optional, empty = no secrets)
+	AgeIdentity   string   // path to age identity file (optional, for encrypted secrets)
 	DataSeedDir   string   // if set, copy contents into data dir before execution
 	DBTDriver     string   // ODBC driver for dbt profiles (default: config.DefaultDBTDriver)
 	KeepArtifacts []string           // which run subdirs to keep after completion (default: all)
@@ -78,11 +79,15 @@ func Execute(ctx context.Context, cfg *config.ProjectConfig, opts ExecuteOpts) (
 		}
 	}
 
-	// Load secrets and start SDK server if configured
+	// Load secrets — detect encrypted (.age) vs plaintext
 	var store *secrets.Store
 	if opts.SecretsPath != "" {
 		var err error
-		store, err = secrets.Load(opts.SecretsPath)
+		if strings.HasSuffix(opts.SecretsPath, ".age") {
+			store, err = secrets.LoadEncrypted(opts.SecretsPath, opts.AgeIdentity, "")
+		} else {
+			store, err = secrets.Load(opts.SecretsPath)
+		}
 		if err != nil {
 			return nil, fmt.Errorf("loading secrets: %w", err)
 		}

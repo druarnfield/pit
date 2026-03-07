@@ -137,6 +137,18 @@ func Execute(ctx context.Context, cfg *config.ProjectConfig, opts ExecuteOpts) (
 		run.Tasks = append(run.Tasks, ti)
 	}
 
+	// Record run start in metadata store
+	if opts.MetaStore != nil {
+		trigger := opts.Trigger
+		if trigger == "" {
+			trigger = "manual"
+		}
+		runDir := filepath.Dir(snapshotDir)
+		if err := opts.MetaStore.RecordRunStart(run.ID, run.DAGName, string(run.Status), runDir, trigger, run.StartedAt); err != nil {
+			fmt.Fprintf(os.Stderr, "warning: metadata recording failed: %v\n", err)
+		}
+	}
+
 	// Apply DAG-level timeout
 	if cfg.DAG.Timeout.Duration > 0 {
 		var cancel context.CancelFunc
@@ -190,6 +202,22 @@ func Execute(ctx context.Context, cfg *config.ProjectConfig, opts ExecuteOpts) (
 		if ti.Status == StatusFailed || ti.Status == StatusUpstreamFailed {
 			run.Status = StatusFailed
 			break
+		}
+	}
+
+	// Record run end in metadata store
+	if opts.MetaStore != nil {
+		var errMsg string
+		if run.Status == StatusFailed {
+			for _, ti := range run.Tasks {
+				if ti.Status == StatusFailed && ti.Error != nil {
+					errMsg = ti.Error.Error()
+					break
+				}
+			}
+		}
+		if err := opts.MetaStore.RecordRunEnd(run.ID, string(run.Status), run.EndedAt, errMsg); err != nil {
+			fmt.Fprintf(os.Stderr, "warning: metadata recording failed: %v\n", err)
 		}
 	}
 
@@ -331,6 +359,24 @@ func executeTask(ctx context.Context, ti *TaskInstance, run *Run, cfg *config.Pr
 	ti.Status = StatusRunning
 	ti.StartedAt = time.Now()
 	run.mu.Unlock()
+
+	// Record task start in metadata store
+	if opts.MetaStore != nil {
+		logPath := filepath.Join(run.LogDir, ti.Name+".log")
+		opts.MetaStore.RecordTaskStart(run.ID, ti.Name, string(StatusRunning), logPath, ti.StartedAt)
+		defer func() {
+			run.mu.Lock()
+			status := string(ti.Status)
+			endedAt := ti.EndedAt
+			attempts := ti.Attempt
+			var errMsg string
+			if ti.Error != nil {
+				errMsg = ti.Error.Error()
+			}
+			run.mu.Unlock()
+			opts.MetaStore.RecordTaskEnd(run.ID, ti.Name, status, endedAt, attempts, errMsg)
+		}()
+	}
 
 	scriptPath := filepath.Join(run.SnapshotDir, ti.Script)
 

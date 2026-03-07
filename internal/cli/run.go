@@ -72,6 +72,7 @@ func newRunCmd() *cobra.Command {
 				DBTDriver:     resolveDBTDriver(),
 				KeepArtifacts: resolveKeepArtifacts(cfg.DAG.KeepArtifacts),
 				MetaStore:     metaStore,
+				Trigger:       "manual",
 			}
 
 			run, err := engine.Execute(ctx, cfg, opts)

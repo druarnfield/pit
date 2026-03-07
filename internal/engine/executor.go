@@ -241,7 +241,9 @@ func Execute(ctx context.Context, cfg *config.ProjectConfig, opts ExecuteOpts) (
 	// Record declared outputs on success
 	if opts.MetaStore != nil && run.Status == StatusSuccess {
 		for _, o := range cfg.Outputs {
-			opts.MetaStore.RecordOutput(run.ID, run.DAGName, o.Name, o.Type, o.Location)
+			if err := opts.MetaStore.RecordOutput(run.ID, run.DAGName, o.Name, o.Type, o.Location); err != nil {
+				fmt.Fprintf(os.Stderr, "warning: output metadata recording failed: %v\n", err)
+			}
 		}
 	}
 

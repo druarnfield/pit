@@ -15,6 +15,7 @@ import (
 	"github.com/druarnfield/pit/internal/config"
 	"github.com/druarnfield/pit/internal/gitrepo"
 	"github.com/druarnfield/pit/internal/loader"
+	"github.com/druarnfield/pit/internal/loghub"
 	"github.com/druarnfield/pit/internal/runner"
 	"github.com/druarnfield/pit/internal/sdk"
 	"github.com/druarnfield/pit/internal/secrets"
@@ -33,6 +34,8 @@ type ExecuteOpts struct {
 	KeepArtifacts []string           // which run subdirs to keep after completion (default: all)
 	MetaStore     MetadataRecorder   // nil = no metadata tracking
 	Trigger       string             // trigger source: "manual", "cron", "ftp_watch", "webhook"
+	LogHub        *loghub.Hub        // nil = no live log streaming
+	RunID         string             // if set, use this instead of generating (for webhook streaming)
 }
 
 // Execute runs a DAG to completion.
@@ -41,7 +44,10 @@ func Execute(ctx context.Context, cfg *config.ProjectConfig, opts ExecuteOpts) (
 		opts.RunsDir = "runs"
 	}
 
-	runID := GenerateRunID(cfg.DAG.Name)
+	runID := opts.RunID
+	if runID == "" {
+		runID = GenerateRunID(cfg.DAG.Name)
+	}
 
 	// Resolve the project source directory. For git-backed projects the repo
 	// is cloned / updated in a persistent cache and that cache becomes the
@@ -138,6 +144,11 @@ func Execute(ctx context.Context, cfg *config.ProjectConfig, opts ExecuteOpts) (
 	// guard in executeTask and causes a nil-pointer panic in ResolveField.
 	if store != nil {
 		run.SecretsResolver = store
+	}
+
+	// Activate run in log hub so SSE clients can discover it
+	if opts.LogHub != nil {
+		opts.LogHub.Activate(runID)
 	}
 
 	for _, tc := range cfg.Tasks {
@@ -248,6 +259,11 @@ func Execute(ctx context.Context, cfg *config.ProjectConfig, opts ExecuteOpts) (
 	}
 
 	printSummary(os.Stdout, run)
+
+	// Signal hub that run is complete
+	if opts.LogHub != nil {
+		opts.LogHub.Complete(run.ID, string(run.Status))
+	}
 
 	// Cleanup artifacts based on keep_artifacts config
 	if len(opts.KeepArtifacts) > 0 {
@@ -475,18 +491,27 @@ func executeTask(ctx context.Context, ti *TaskInstance, run *Run, cfg *config.Pr
 	}
 	defer logFile.Close()
 
-	// Set up log writer — optionally tee to stdout
-	var logWriter io.Writer = logFile
+	// Set up log writer — optionally tee to stdout and/or hub
+	writers := []io.Writer{logFile}
+	var hubWriter *loghub.Writer
 	if opts.Verbose {
 		isConcurrent := len(concurrent) > 0 && concurrent[0]
 		if isConcurrent {
-			logWriter = io.MultiWriter(logFile, &prefixWriter{
+			writers = append(writers, &prefixWriter{
 				prefix: []byte("[" + ti.Name + "] "),
 				dest:   os.Stdout,
 			})
 		} else {
-			logWriter = io.MultiWriter(logFile, os.Stdout)
+			writers = append(writers, os.Stdout)
 		}
+	}
+	if opts.LogHub != nil {
+		hubWriter = loghub.NewWriter(opts.LogHub, run.ID, run.DAGName, ti.Name, 1)
+		writers = append(writers, hubWriter)
+	}
+	var logWriter io.Writer = logFile
+	if len(writers) > 1 {
+		logWriter = io.MultiWriter(writers...)
 	}
 
 	// Build environment
@@ -532,6 +557,9 @@ func executeTask(ctx context.Context, ti *TaskInstance, run *Run, cfg *config.Pr
 		run.mu.Lock()
 		ti.Attempt = attempt
 		run.mu.Unlock()
+		if hubWriter != nil {
+			hubWriter.SetAttempt(attempt)
+		}
 
 		// Check if parent context is cancelled before each attempt
 		if ctx.Err() != nil {

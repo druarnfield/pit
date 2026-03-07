@@ -18,7 +18,8 @@ type Secret struct {
 // Store holds secrets parsed from a TOML file, organised by section.
 // Resolution checks the project-scoped section first, then falls back to [global].
 type Store struct {
-	data map[string]map[string]Secret
+	data     map[string]map[string]Secret
+	OnAccess func(AuditEvent) // optional callback, fired on successful resolve
 }
 
 // Load parses a TOML secrets file and returns a Store.
@@ -142,14 +143,20 @@ func LoadEncrypted(path, identityPath, configIdentity string) (*Store, error) {
 // For structured secrets, Resolve returns a JSON object of the fields.
 func (s *Store) Resolve(project, key string) (string, error) {
 	if sec, ok := s.lookup(project, key); ok {
+		var val string
 		if sec.Fields != nil {
 			b, err := json.Marshal(sec.Fields)
 			if err != nil {
 				return "", fmt.Errorf("marshalling structured secret %q: %w", key, err)
 			}
-			return string(b), nil
+			val = string(b)
+		} else {
+			val = sec.Value
 		}
-		return sec.Value, nil
+		if s.OnAccess != nil {
+			s.OnAccess(AuditEvent{Project: project, Key: key})
+		}
+		return val, nil
 	}
 	return "", fmt.Errorf("secret %q not found for project %q", key, project)
 }
@@ -162,6 +169,9 @@ func (s *Store) ResolveField(project, secret, field string) (string, error) {
 			return "", fmt.Errorf("secret %q is a plain value, not a structured secret (use Resolve instead)", secret)
 		}
 		if val, ok := sec.Fields[field]; ok {
+			if s.OnAccess != nil {
+				s.OnAccess(AuditEvent{Project: project, Key: secret})
+			}
 			return val, nil
 		}
 		return "", fmt.Errorf("field %q not found in secret %q for project %q", field, secret, project)

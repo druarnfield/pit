@@ -185,7 +185,7 @@ runner = "$ node"              # runs: node tasks/transform.js
 | `pit validate` | Validate all `pit.toml` files (cycles, missing deps, script paths) |
 | `pit init <name>` | Scaffold a new project (`--type python\|sql\|shell\|dbt`) |
 | `pit run <dag>[/<task>]` | Execute a DAG or single task (`--verbose` for live output) |
-| `pit serve [--port N]` | Run the scheduler with cron, FTP watch, and webhook triggers (webhook port default: 9090) |
+| `pit serve [--port N]` | Run the scheduler with cron, FTP watch, webhook triggers, and REST API (default port: 9090) |
 | `pit logs <dag>[/<task>]` | View task logs (`--list` for runs, `--run-id` for specific run) |
 | `pit outputs` | List declared outputs (`--project`, `--type`, `--location` filters) |
 | `pit status` | Show latest run status for each DAG (requires metadata store) |
@@ -346,6 +346,63 @@ The database can also be queried directly with `sqlite3`:
 sqlite3 pit_metadata.db "SELECT * FROM runs WHERE status='failed' ORDER BY started_at DESC LIMIT 5"
 ```
 
+## REST API
+
+`pit serve` exposes a read-only REST API on the same port as webhooks (default 9090). The API provides access to DAG configuration, run history, task instances, and declared outputs.
+
+### Endpoints
+
+| Method | Path | Description |
+|--------|------|-------------|
+| `GET` | `/api/health` | Health check (always public) |
+| `GET` | `/api/dags` | List all DAGs with latest run status |
+| `GET` | `/api/dags/{name}` | DAG detail with task graph and recent runs |
+| `GET` | `/api/runs` | Recent runs across all DAGs (`?limit=N`, `?dag=name`) |
+| `GET` | `/api/runs/{id}` | Run detail with task instances |
+| `GET` | `/api/outputs` | Outputs registry (`?dag=name` filter) |
+
+All responses are `application/json`. Times are RFC 3339 UTC.
+
+### Authentication
+
+Optional bearer token auth via `pit_config.toml`:
+
+```toml
+api_token = "my-secret-token"
+```
+
+When set, all `/api/` routes except `/api/health` require:
+
+```
+Authorization: Bearer my-secret-token
+```
+
+When `api_token` is not set, all endpoints are open.
+
+### Example
+
+```bash
+# Health check
+curl http://localhost:9090/api/health
+# → {"status":"ok"}
+
+# List DAGs
+curl http://localhost:9090/api/dags
+# → {"dags":[{"name":"claims_pipeline","schedule":"0 6 * * *","task_count":3,"latest_run":{...}}]}
+
+# DAG detail
+curl http://localhost:9090/api/dags/claims_pipeline
+
+# Recent runs (with filters)
+curl "http://localhost:9090/api/runs?dag=claims_pipeline&limit=5"
+
+# Run detail with task instances
+curl http://localhost:9090/api/runs/20260307_143000.000_claims_pipeline
+
+# Outputs
+curl "http://localhost:9090/api/outputs?dag=claims_pipeline"
+```
+
 ## Workspace Configuration
 
 Create a `pit_config.toml` in the project root to set workspace-level defaults:
@@ -366,6 +423,7 @@ keep_artifacts = ["logs", "project", "data"]
 | `dbt_driver` | `"ODBC Driver 17 for SQL Server"` | ODBC driver for dbt profiles |
 | `keep_artifacts` | `["logs", "project", "data"]` | Which run subdirs to keep after completion |
 | `metadata_db` | `"pit_metadata.db"` | Path to SQLite metadata database |
+| `api_token` | (none) | Bearer token for REST API authentication (empty = no auth) |
 
 All fields are optional. Relative paths are resolved from the project root. CLI flags take precedence if both are set.
 
@@ -649,7 +707,6 @@ The following features are planned but not yet implemented. See `pit-architectur
 
 ### Long-term
 
-- **REST API** — Full API for DAG status, run history, task logs, outputs registry, manual triggers.
 - **Status dashboard** — Read-only web UI for monitoring DAGs, viewing logs, browsing outputs.
 - **SDK socket authentication** — Per-connection auth, secret access audit logging, per-project ACLs.
 - **Log archival** — Archive completed run logs for historical queries.

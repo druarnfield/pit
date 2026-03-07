@@ -238,6 +238,13 @@ func Execute(ctx context.Context, cfg *config.ProjectConfig, opts ExecuteOpts) (
 		}
 	}
 
+	// Record declared outputs on success
+	if opts.MetaStore != nil && run.Status == StatusSuccess {
+		for _, o := range cfg.Outputs {
+			opts.MetaStore.RecordOutput(run.ID, run.DAGName, o.Name, o.Type, o.Location)
+		}
+	}
+
 	printSummary(os.Stdout, run)
 
 	// Cleanup artifacts based on keep_artifacts config

@@ -21,7 +21,11 @@ go build ./cmd/pit
 ## Quick Start
 
 ```bash
-# Scaffold a new project
+# Create a new workspace
+pit new my_workspace                 # Python sample project (default)
+pit new my_workspace --type shell    # Shell sample project
+
+# Add more projects to an existing workspace
 pit init my_pipeline                 # Python project (full package layout)
 pit init --type sql my_transforms    # SQL-only project (minimal)
 pit init --type shell my_jobs        # Shell-only project
@@ -182,6 +186,7 @@ runner = "$ node"              # runs: node tasks/transform.js
 
 | Command | Description |
 |---------|-------------|
+| `pit new <name>` | Create a new workspace with config, sample project, and git repo (`--type python\|sql\|shell\|dbt`) |
 | `pit validate` | Validate all `pit.toml` files (cycles, missing deps, script paths) |
 | `pit init <name>` | Scaffold a new project (`--type python\|sql\|shell\|dbt`) |
 | `pit run <dag>[/<task>]` | Execute a DAG or single task (`--verbose` for live output) |

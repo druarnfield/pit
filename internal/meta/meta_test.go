@@ -1,6 +1,7 @@
 package meta
 
 import (
+	"path/filepath"
 	"testing"
 	"time"
 )
@@ -29,4 +30,29 @@ func TestTaskInstanceRecordFields(t *testing.T) {
 	if ti.RunID == "" {
 		t.Fatal("expected non-empty RunID")
 	}
+}
+
+func TestOpenMemory(t *testing.T) {
+	store, err := Open(":memory:")
+	if err != nil {
+		t.Fatalf("Open(:memory:) unexpected error: %v", err)
+	}
+	defer store.Close()
+}
+
+func TestOpenTwice(t *testing.T) {
+	dir := t.TempDir()
+	path := filepath.Join(dir, "test.db")
+
+	s1, err := Open(path)
+	if err != nil {
+		t.Fatalf("first Open: %v", err)
+	}
+	s1.Close()
+
+	s2, err := Open(path)
+	if err != nil {
+		t.Fatalf("second Open: %v", err)
+	}
+	s2.Close()
 }

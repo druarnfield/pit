@@ -52,12 +52,6 @@ func (h *handler) handleHealth(w http.ResponseWriter, r *http.Request) {
 	writeJSON(w, http.StatusOK, map[string]string{"status": "ok"})
 }
 
-// Stub handlers — will be replaced in subsequent tasks
-func (h *handler) handleListDAGs(w http.ResponseWriter, r *http.Request)    { writeJSON(w, http.StatusOK, nil) }
-func (h *handler) handleDAGDetail(w http.ResponseWriter, r *http.Request)   { writeJSON(w, http.StatusOK, nil) }
-func (h *handler) handleListRuns(w http.ResponseWriter, r *http.Request)    { writeJSON(w, http.StatusOK, nil) }
-func (h *handler) handleRunDetail(w http.ResponseWriter, r *http.Request)   { writeJSON(w, http.StatusOK, nil) }
-func (h *handler) handleListOutputs(w http.ResponseWriter, r *http.Request) { writeJSON(w, http.StatusOK, nil) }
 
 func writeJSON(w http.ResponseWriter, status int, v any) {
 	w.Header().Set("Content-Type", "application/json")

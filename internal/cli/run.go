@@ -73,6 +73,7 @@ func newRunCmd() *cobra.Command {
 				KeepArtifacts: resolveKeepArtifacts(cfg.DAG.KeepArtifacts),
 				MetaStore:     metaStore,
 				Trigger:       "manual",
+				AgeIdentity:   resolveAgeIdentityPath(),
 			}
 
 			run, err := engine.Execute(ctx, cfg, opts)

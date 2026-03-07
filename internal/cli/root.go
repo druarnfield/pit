@@ -112,6 +112,22 @@ func resolveMetadataDB() string {
 	return filepath.Join(projectDir, "pit_metadata.db")
 }
 
+// resolveSecretsRecipients returns the recipients file path from workspace config.
+func resolveSecretsRecipients() string {
+	if workspaceCfg != nil && workspaceCfg.SecretsRecipients != "" {
+		return workspaceCfg.SecretsRecipients
+	}
+	return ""
+}
+
+// resolveAgeIdentityPath returns the age identity path from workspace config.
+func resolveAgeIdentityPath() string {
+	if workspaceCfg != nil && workspaceCfg.AgeIdentity != "" {
+		return workspaceCfg.AgeIdentity
+	}
+	return ""
+}
+
 // Execute runs the root command.
 func Execute() {
 	if err := newRootCmd().Execute(); err != nil {

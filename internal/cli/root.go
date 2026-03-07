@@ -47,6 +47,7 @@ func newRootCmd() *cobra.Command {
 	root.PersistentFlags().StringVar(&secretsPath, "secrets", "", "path to secrets file")
 
 	root.AddCommand(
+		newNewCmd(),
 		newValidateCmd(),
 		newInitCmd(),
 		newRunCmd(),

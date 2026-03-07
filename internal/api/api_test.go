@@ -71,7 +71,7 @@ func seedTestRuns(t *testing.T, store *meta.SQLiteStore) {
 }
 
 func TestHealth(t *testing.T) {
-	h := NewHandler(newTestConfigs(), newTestStore(t), "")
+	h := NewHandler(newTestConfigs(), newTestStore(t), "", nil, "")
 	req := httptest.NewRequest(http.MethodGet, "/api/health", nil)
 	w := httptest.NewRecorder()
 	h.ServeHTTP(w, req)
@@ -88,7 +88,7 @@ func TestHealth(t *testing.T) {
 }
 
 func TestAuthRequired(t *testing.T) {
-	h := NewHandler(newTestConfigs(), newTestStore(t), "secret-token")
+	h := NewHandler(newTestConfigs(), newTestStore(t), "secret-token", nil, "")
 
 	// No token — should get 401
 	req := httptest.NewRequest(http.MethodGet, "/api/dags", nil)
@@ -118,7 +118,7 @@ func TestAuthRequired(t *testing.T) {
 }
 
 func TestAuthBypassedForHealth(t *testing.T) {
-	h := NewHandler(newTestConfigs(), newTestStore(t), "secret-token")
+	h := NewHandler(newTestConfigs(), newTestStore(t), "secret-token", nil, "")
 
 	req := httptest.NewRequest(http.MethodGet, "/api/health", nil)
 	w := httptest.NewRecorder()
@@ -129,7 +129,7 @@ func TestAuthBypassedForHealth(t *testing.T) {
 }
 
 func TestNoAuthWhenEmpty(t *testing.T) {
-	h := NewHandler(newTestConfigs(), newTestStore(t), "")
+	h := NewHandler(newTestConfigs(), newTestStore(t), "", nil, "")
 
 	req := httptest.NewRequest(http.MethodGet, "/api/dags", nil)
 	w := httptest.NewRecorder()
@@ -142,7 +142,7 @@ func TestNoAuthWhenEmpty(t *testing.T) {
 func TestListDAGs(t *testing.T) {
 	store := newTestStore(t)
 	seedTestRuns(t, store)
-	h := NewHandler(newTestConfigs(), store, "")
+	h := NewHandler(newTestConfigs(), store, "", nil, "")
 
 	req := httptest.NewRequest(http.MethodGet, "/api/dags", nil)
 	w := httptest.NewRecorder()
@@ -192,7 +192,7 @@ func TestListDAGs(t *testing.T) {
 func TestDAGDetail(t *testing.T) {
 	store := newTestStore(t)
 	seedTestRuns(t, store)
-	h := NewHandler(newTestConfigs(), store, "")
+	h := NewHandler(newTestConfigs(), store, "", nil, "")
 
 	req := httptest.NewRequest(http.MethodGet, "/api/dags/dag_a", nil)
 	w := httptest.NewRecorder()
@@ -230,7 +230,7 @@ func TestDAGDetail(t *testing.T) {
 }
 
 func TestDAGDetailNotFound(t *testing.T) {
-	h := NewHandler(newTestConfigs(), newTestStore(t), "")
+	h := NewHandler(newTestConfigs(), newTestStore(t), "", nil, "")
 
 	req := httptest.NewRequest(http.MethodGet, "/api/dags/nonexistent", nil)
 	w := httptest.NewRecorder()
@@ -244,7 +244,7 @@ func TestDAGDetailNotFound(t *testing.T) {
 func TestListRuns(t *testing.T) {
 	store := newTestStore(t)
 	seedTestRuns(t, store)
-	h := NewHandler(newTestConfigs(), store, "")
+	h := NewHandler(newTestConfigs(), store, "", nil, "")
 
 	// All runs
 	req := httptest.NewRequest(http.MethodGet, "/api/runs", nil)
@@ -302,7 +302,7 @@ func TestListRuns(t *testing.T) {
 func TestRunDetail(t *testing.T) {
 	store := newTestStore(t)
 	seedTestRuns(t, store)
-	h := NewHandler(newTestConfigs(), store, "")
+	h := NewHandler(newTestConfigs(), store, "", nil, "")
 
 	req := httptest.NewRequest(http.MethodGet, "/api/runs/20260307_143000.000_dag_a", nil)
 	w := httptest.NewRecorder()
@@ -333,7 +333,7 @@ func TestRunDetail(t *testing.T) {
 }
 
 func TestRunDetailNotFound(t *testing.T) {
-	h := NewHandler(newTestConfigs(), newTestStore(t), "")
+	h := NewHandler(newTestConfigs(), newTestStore(t), "", nil, "")
 
 	req := httptest.NewRequest(http.MethodGet, "/api/runs/nonexistent", nil)
 	w := httptest.NewRecorder()
@@ -347,7 +347,7 @@ func TestRunDetailNotFound(t *testing.T) {
 func TestListOutputs(t *testing.T) {
 	store := newTestStore(t)
 	seedTestRuns(t, store)
-	h := NewHandler(newTestConfigs(), store, "")
+	h := NewHandler(newTestConfigs(), store, "", nil, "")
 
 	// All outputs
 	req := httptest.NewRequest(http.MethodGet, "/api/outputs", nil)

@@ -9,6 +9,7 @@ import (
 	"strings"
 
 	"github.com/druarnfield/pit/internal/config"
+	"github.com/druarnfield/pit/internal/loghub"
 	"github.com/druarnfield/pit/internal/meta"
 )
 
@@ -16,15 +17,19 @@ type handler struct {
 	configs map[string]*config.ProjectConfig
 	store   meta.Store
 	token   string
+	hub     *loghub.Hub
+	runsDir string
 }
 
 // NewHandler returns an http.Handler for the /api/ routes.
-func NewHandler(configs map[string]*config.ProjectConfig, store meta.Store, token string) http.Handler {
-	h := &handler{configs: configs, store: store, token: token}
+func NewHandler(configs map[string]*config.ProjectConfig, store meta.Store, token string, hub *loghub.Hub, runsDir string) http.Handler {
+	h := &handler{configs: configs, store: store, token: token, hub: hub, runsDir: runsDir}
 
 	mux := http.NewServeMux()
 	mux.HandleFunc("GET /api/health", h.handleHealth)
 	mux.HandleFunc("GET /api/dags", h.handleListDAGs)
+	mux.HandleFunc("GET /api/runs/{id}/logs", h.handleRunLogs)
+	mux.HandleFunc("GET /api/dags/{name}/logs", h.handleDAGLogs)
 	mux.HandleFunc("GET /api/dags/{name}", h.handleDAGDetail)
 	mux.HandleFunc("GET /api/runs", h.handleListRuns)
 	mux.HandleFunc("GET /api/runs/{id}", h.handleRunDetail)

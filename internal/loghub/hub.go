@@ -131,6 +131,18 @@ func (h *Hub) Complete(runID string, status string) {
 	delete(h.subscribers, runID)
 }
 
+// ActiveRunForDAG returns the run ID of an active run for the given DAG name.
+func (h *Hub) ActiveRunForDAG(dagName string) string {
+	h.mu.RLock()
+	defer h.mu.RUnlock()
+	for runID := range h.active {
+		if len(runID) > 20 && runID[20:] == dagName {
+			return runID
+		}
+	}
+	return ""
+}
+
 // Purge removes completed runs older than the given duration.
 func (h *Hub) Purge(olderThan time.Duration) {
 	h.mu.Lock()

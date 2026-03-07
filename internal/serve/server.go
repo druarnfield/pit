@@ -99,7 +99,7 @@ func NewServer(rootDir, secretsPath string, verbose bool, srvOpts Options) (*Ser
 
 	// Create API handler if metadata store is available
 	if srvOpts.MetaQueryStore != nil {
-		s.apiHandler = api.NewHandler(configs, srvOpts.MetaQueryStore, srvOpts.APIToken)
+		s.apiHandler = api.NewHandler(configs, srvOpts.MetaQueryStore, srvOpts.APIToken, nil, srvOpts.RunsDir)
 	}
 
 	// Register triggers for each DAG

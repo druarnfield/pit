@@ -26,6 +26,7 @@ type PitConfig struct {
 	SecretsDir    string   `toml:"secrets_dir"`
 	RunsDir       string   `toml:"runs_dir"`
 	RepoCacheDir  string   `toml:"repo_cache_dir"`
+	MetadataDB    string   `toml:"metadata_db"`
 	DBTDriver     string   `toml:"dbt_driver"`
 	KeepArtifacts []string `toml:"keep_artifacts"`
 }
@@ -57,6 +58,9 @@ func LoadPitConfig(rootDir string) (*PitConfig, error) {
 	}
 	if cfg.RepoCacheDir != "" && !filepath.IsAbs(cfg.RepoCacheDir) {
 		cfg.RepoCacheDir = filepath.Join(rootDir, cfg.RepoCacheDir)
+	}
+	if cfg.MetadataDB != "" && !filepath.IsAbs(cfg.MetadataDB) {
+		cfg.MetadataDB = filepath.Join(rootDir, cfg.MetadataDB)
 	}
 
 	// Validate keep_artifacts entries

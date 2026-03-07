@@ -3,6 +3,7 @@ package serve
 import (
 	"context"
 	"crypto/subtle"
+	"encoding/json"
 	"fmt"
 	"log"
 	"net/http"
@@ -263,11 +264,115 @@ func (s *Server) webhookHandler(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 
+	stream := r.URL.Query().Get("stream") == "true"
+
+	if stream {
+		s.webhookStreamRun(w, r, dagName)
+		return
+	}
+
+	// existing fire-and-forget behavior unchanged
 	select {
 	case s.eventCh <- trigger.Event{DAGName: dagName, Source: "webhook"}:
 		w.WriteHeader(http.StatusAccepted)
 	default:
 		http.Error(w, "server busy", http.StatusServiceUnavailable)
+	}
+}
+
+// webhookStreamRun triggers a run and streams its logs via SSE.
+func (s *Server) webhookStreamRun(w http.ResponseWriter, r *http.Request, dagName string) {
+	cfg, ok := s.configs[dagName]
+	if !ok {
+		http.Error(w, "unknown DAG", http.StatusNotFound)
+		return
+	}
+
+	// Check overlap
+	overlap := cfg.DAG.Overlap
+	if overlap == "" {
+		overlap = "allow"
+	}
+	s.mu.Lock()
+	isActive := s.activeRuns[dagName]
+	if isActive && overlap == "skip" {
+		s.mu.Unlock()
+		http.Error(w, "DAG already running (overlap=skip)", http.StatusConflict)
+		return
+	}
+	s.activeRuns[dagName] = true
+	s.mu.Unlock()
+
+	defer func() {
+		s.mu.Lock()
+		s.activeRuns[dagName] = false
+		s.mu.Unlock()
+	}()
+
+	opts := s.opts
+	opts.Trigger = "webhook"
+	opts.KeepArtifacts = resolveArtifacts(cfg.DAG.KeepArtifacts, s.workspaceArtifacts)
+
+	// Generate run ID before execution so we can subscribe to the hub
+	runID := engine.GenerateRunID(dagName)
+	opts.RunID = runID
+
+	// Activate in hub before starting execution
+	if s.logHub != nil {
+		s.logHub.Activate(runID)
+	}
+
+	// Start execution in background
+	go func() {
+		log.Printf("[%s] triggered by webhook (streaming)", dagName)
+		run, err := engine.Execute(r.Context(), cfg, opts)
+		if err != nil {
+			log.Printf("[%s] execution error: %v", dagName, err)
+			return
+		}
+		log.Printf("[%s] completed: %s", dagName, run.Status)
+	}()
+
+	// Stream logs via SSE — blocks until run completes or client disconnects
+	flusher, ok := w.(http.Flusher)
+	if !ok {
+		http.Error(w, "streaming not supported", http.StatusInternalServerError)
+		return
+	}
+
+	w.Header().Set("Content-Type", "text/event-stream")
+	w.Header().Set("Cache-Control", "no-cache")
+	w.Header().Set("Connection", "keep-alive")
+	w.WriteHeader(http.StatusOK)
+
+	if s.logHub == nil {
+		fmt.Fprintf(w, "event: complete\ndata: {\"status\":\"unknown\"}\n\n")
+		flusher.Flush()
+		return
+	}
+
+	ch := s.logHub.Subscribe(runID)
+	defer s.logHub.Unsubscribe(runID, ch)
+
+	for {
+		select {
+		case entry, open := <-ch:
+			if !open {
+				finalStatus, _ := s.logHub.RunStatus(runID)
+				if finalStatus == "" {
+					finalStatus = "unknown"
+				}
+				data, _ := json.Marshal(map[string]string{"status": finalStatus})
+				fmt.Fprintf(w, "event: complete\ndata: %s\n\n", data)
+				flusher.Flush()
+				return
+			}
+			data, _ := json.Marshal(entry)
+			fmt.Fprintf(w, "event: log\ndata: %s\n\n", data)
+			flusher.Flush()
+		case <-r.Context().Done():
+			return
+		}
 	}
 }
 

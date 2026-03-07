@@ -28,8 +28,10 @@ type PitConfig struct {
 	RepoCacheDir  string   `toml:"repo_cache_dir"`
 	MetadataDB    string   `toml:"metadata_db"`
 	APIToken      string   `toml:"api_token"`
-	DBTDriver     string   `toml:"dbt_driver"`
-	KeepArtifacts []string `toml:"keep_artifacts"`
+	DBTDriver         string   `toml:"dbt_driver"`
+	KeepArtifacts     []string `toml:"keep_artifacts"`
+	SecretsRecipients string   `toml:"secrets_recipients"`
+	AgeIdentity       string   `toml:"age_identity"`
 }
 
 // LoadPitConfig loads pit_config.toml from rootDir.
@@ -63,6 +65,10 @@ func LoadPitConfig(rootDir string) (*PitConfig, error) {
 	if cfg.MetadataDB != "" && !filepath.IsAbs(cfg.MetadataDB) {
 		cfg.MetadataDB = filepath.Join(rootDir, cfg.MetadataDB)
 	}
+	if cfg.SecretsRecipients != "" && !filepath.IsAbs(cfg.SecretsRecipients) {
+		cfg.SecretsRecipients = filepath.Join(rootDir, cfg.SecretsRecipients)
+	}
+	// age_identity is NOT made absolute — it may contain ~ or be a user-level path
 
 	// Validate keep_artifacts entries
 	for _, a := range cfg.KeepArtifacts {

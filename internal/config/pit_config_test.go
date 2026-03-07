@@ -165,4 +165,42 @@ keep_artifacts = ["logs", "data"]
 			t.Errorf("KeepArtifacts = %v, want empty", cfg.KeepArtifacts)
 		}
 	})
+
+	t.Run("secrets_recipients and age_identity", func(t *testing.T) {
+		dir := t.TempDir()
+		content := "secrets_dir = \"secrets/secrets.toml.age\"\nsecrets_recipients = \"secrets/age-recipients.txt\"\nage_identity = \"~/.config/pit/age-key.txt\"\n"
+		if err := os.WriteFile(filepath.Join(dir, "pit_config.toml"), []byte(content), 0o644); err != nil {
+			t.Fatal(err)
+		}
+
+		cfg, err := LoadPitConfig(dir)
+		if err != nil {
+			t.Fatalf("LoadPitConfig() error: %v", err)
+		}
+
+		wantRecipients := filepath.Join(dir, "secrets", "age-recipients.txt")
+		if cfg.SecretsRecipients != wantRecipients {
+			t.Errorf("SecretsRecipients = %q, want %q", cfg.SecretsRecipients, wantRecipients)
+		}
+
+		if cfg.AgeIdentity != "~/.config/pit/age-key.txt" {
+			t.Errorf("AgeIdentity = %q, want %q", cfg.AgeIdentity, "~/.config/pit/age-key.txt")
+		}
+	})
+
+	t.Run("secrets_recipients absolute unchanged", func(t *testing.T) {
+		dir := t.TempDir()
+		content := "secrets_recipients = \"/etc/pit/recipients.txt\"\n"
+		if err := os.WriteFile(filepath.Join(dir, "pit_config.toml"), []byte(content), 0o644); err != nil {
+			t.Fatal(err)
+		}
+
+		cfg, err := LoadPitConfig(dir)
+		if err != nil {
+			t.Fatalf("LoadPitConfig() error: %v", err)
+		}
+		if cfg.SecretsRecipients != "/etc/pit/recipients.txt" {
+			t.Errorf("SecretsRecipients = %q, want %q", cfg.SecretsRecipients, "/etc/pit/recipients.txt")
+		}
+	})
 }

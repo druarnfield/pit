@@ -26,6 +26,7 @@ type MetadataRecorder interface {
 	RecordTaskEnd(runID, taskName, status string, endedAt time.Time, attempts int, errMsg string) error
 	RecordEnvSnapshot(dagName, hashType, hashValue, runID string) error
 	RecordOutput(runID, dagName, name, outputType, location string) error
+	RecordSecretAccess(project, secretKey, dagName, taskName, runID string, timestamp time.Time) error
 }
 
 // SecretsResolver resolves secrets by project scope.

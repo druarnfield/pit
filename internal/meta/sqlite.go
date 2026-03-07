@@ -369,6 +369,19 @@ func (s *SQLiteStore) RecordOutput(runID, dagName, name, outputType, location st
 	return err
 }
 
+// RecordSecretAccess implements engine.MetadataRecorder.
+func (s *SQLiteStore) RecordSecretAccess(project, secretKey, dagName, taskName, runID string, timestamp time.Time) error {
+	return s.RecordSecretEvent(SecretAuditRecord{
+		EventType: "accessed",
+		Project:   project,
+		SecretKey: secretKey,
+		DAGName:   dagName,
+		TaskName:  taskName,
+		RunID:     runID,
+		Timestamp: timestamp,
+	})
+}
+
 // UpdateRunDir updates the run_dir for a given run ID.
 func (s *SQLiteStore) UpdateRunDir(runID, runDir string) error {
 	_, err := s.db.Exec("UPDATE runs SET run_dir = ? WHERE id = ?", runDir, runID)

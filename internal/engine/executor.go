@@ -93,6 +93,15 @@ func Execute(ctx context.Context, cfg *config.ProjectConfig, opts ExecuteOpts) (
 		}
 	}
 
+	// Wire audit callback if metadata store is available
+	if store != nil && opts.MetaStore != nil {
+		dagName := cfg.DAG.Name
+		currentRunID := runID
+		store.OnAccess = func(e secrets.AuditEvent) {
+			opts.MetaStore.RecordSecretAccess(e.Project, e.Key, dagName, "", currentRunID, time.Now())
+		}
+	}
+
 	socketHint := filepath.Join(os.TempDir(), fmt.Sprintf("pit-%d.sock", os.Getpid()))
 	sdkServer, err := sdk.NewServer(socketHint, store, cfg.DAG.Name)
 	if err != nil {

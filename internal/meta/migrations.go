@@ -49,6 +49,22 @@ CREATE TABLE outputs (
 CREATE INDEX idx_outputs_dag ON outputs(dag_name);
 `
 
+const v2SecretAudit = `
+CREATE TABLE secret_audit (
+	id          INTEGER PRIMARY KEY AUTOINCREMENT,
+	event_type  TEXT NOT NULL,
+	project     TEXT NOT NULL,
+	secret_key  TEXT NOT NULL,
+	dag_name    TEXT,
+	task_name   TEXT,
+	run_id      TEXT,
+	timestamp   TEXT NOT NULL
+);
+CREATE INDEX idx_secret_audit_key ON secret_audit(project, secret_key);
+CREATE INDEX idx_secret_audit_event ON secret_audit(event_type, timestamp);
+`
+
 var migrations = []string{
 	v1Schema,
+	v2SecretAudit,
 }

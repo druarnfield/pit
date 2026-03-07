@@ -17,6 +17,8 @@ type Store interface {
 	EnvHistory(dagName, hashType string, limit int) ([]EnvSnapshotRecord, error)
 	OutputsByRun(runID string) ([]OutputRecord, error)
 	LatestRunPerDAG() ([]RunRecord, error)
+	RecordSecretEvent(event SecretAuditRecord) error
+	SecretAuditHistory(project, secretKey string, limit int) ([]SecretAuditRecord, error)
 }
 
 // RunRecord represents a single DAG run.
@@ -51,6 +53,18 @@ type EnvSnapshotRecord struct {
 	HashValue string
 	FirstSeen time.Time
 	RunID     string
+}
+
+// SecretAuditRecord represents a secret access or modification event.
+type SecretAuditRecord struct {
+	ID        int
+	EventType string // "created", "updated", "deleted", "accessed"
+	Project   string
+	SecretKey string
+	DAGName   string
+	TaskName  string
+	RunID     string
+	Timestamp time.Time
 }
 
 // OutputRecord represents a named output produced by a run.

@@ -375,6 +375,54 @@ func (s *SQLiteStore) UpdateRunDir(runID, runDir string) error {
 	return err
 }
 
+// RecordSecretEvent inserts a secret audit record.
+func (s *SQLiteStore) RecordSecretEvent(event SecretAuditRecord) error {
+	_, err := s.db.Exec(
+		`INSERT INTO secret_audit (event_type, project, secret_key, dag_name, task_name, run_id, timestamp)
+		 VALUES (?, ?, ?, ?, ?, ?, ?)`,
+		event.EventType, event.Project, event.SecretKey,
+		nilIfEmpty(event.DAGName), nilIfEmpty(event.TaskName), nilIfEmpty(event.RunID),
+		event.Timestamp.UTC().Format(time.RFC3339),
+	)
+	return err
+}
+
+// SecretAuditHistory returns audit records for a specific secret, most recent first.
+func (s *SQLiteStore) SecretAuditHistory(project, secretKey string, limit int) ([]SecretAuditRecord, error) {
+	rows, err := s.db.Query(
+		`SELECT id, event_type, project, secret_key, dag_name, task_name, run_id, timestamp
+		 FROM secret_audit WHERE project = ? AND secret_key = ?
+		 ORDER BY timestamp DESC LIMIT ?`,
+		project, secretKey, limit,
+	)
+	if err != nil {
+		return nil, err
+	}
+	defer rows.Close()
+
+	var records []SecretAuditRecord
+	for rows.Next() {
+		var r SecretAuditRecord
+		var ts string
+		var dagName, taskName, runID sql.NullString
+		if err := rows.Scan(&r.ID, &r.EventType, &r.Project, &r.SecretKey, &dagName, &taskName, &runID, &ts); err != nil {
+			return nil, err
+		}
+		r.Timestamp, _ = time.Parse(time.RFC3339, ts)
+		if dagName.Valid {
+			r.DAGName = dagName.String
+		}
+		if taskName.Valid {
+			r.TaskName = taskName.String
+		}
+		if runID.Valid {
+			r.RunID = runID.String
+		}
+		records = append(records, r)
+	}
+	return records, rows.Err()
+}
+
 // Compile-time interface satisfaction check.
 var _ Store = (*SQLiteStore)(nil)
 

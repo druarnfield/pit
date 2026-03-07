@@ -121,6 +121,26 @@ The CLI `pit logs` command continues reading raw text files unchanged.
 
 - Creates `Hub` instance, passes to both `ExecuteOpts` and `api.NewHandler`
 
+## Webhook Streaming
+
+The existing webhook endpoint (`POST /webhook/{dag}`) triggers a DAG run and returns a JSON response with the run ID. With an opt-in query param, the caller can instead receive an SSE stream of the run's logs:
+
+```
+POST /webhook/{dag}?stream=true
+```
+
+**Without `?stream=true` (default):** Behaviour unchanged — returns JSON with `run_id` and status, connection closes immediately.
+
+**With `?stream=true`:** The response switches to SSE (`Content-Type: text/event-stream`). The caller receives all log events for the triggered run in real-time, followed by the `complete` event with the final status. The connection closes after the run finishes.
+
+This gives webhook callers (CI systems, external orchestrators) the option to follow a run to completion in a single HTTP request — trigger and stream.
+
+### Implementation
+
+- The webhook handler checks for `stream=true` query param
+- If streaming, it triggers the run as usual, then delegates to the same SSE streaming logic used by `/api/runs/{id}/logs`
+- The hub subscription happens immediately after the run is started, so no log lines are missed
+
 ## Testing
 
 ### `internal/loghub` (unit tests)
@@ -142,6 +162,11 @@ The CLI `pit logs` command continues reading raw text files unchanged.
 
 - Writing to hub writer publishes `Entry` with correct metadata
 
+### Webhook streaming (httptest)
+
+- `POST /webhook/{dag}?stream=true` returns SSE stream with log events and complete event
+- `POST /webhook/{dag}` (no param) returns JSON as before (no regression)
+
 ### Live tailing (integration, `//go:build integration`)
 
 - Start run, connect SSE mid-execution, verify lines arrive, verify complete event
@@ -159,3 +184,4 @@ The CLI `pit logs` command continues reading raw text files unchanged.
 | Create | `internal/api/sse.go` | SSE handler: live tailing via hub, finished runs from disk |
 | Modify | `internal/api/api_test.go` | Tests for SSE endpoints |
 | Modify | `internal/serve/server.go` | Create Hub, pass to executor and API |
+| Modify | `internal/serve/webhook.go` | Add `?stream=true` opt-in SSE streaming to webhook handler |

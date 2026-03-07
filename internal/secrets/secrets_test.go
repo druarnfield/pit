@@ -319,3 +319,100 @@ func TestResolveField_PlainSecretErrors(t *testing.T) {
 		t.Errorf("error = %q, want it to mention 'plain value'", err)
 	}
 }
+
+func TestLoadFromBytes(t *testing.T) {
+	store, err := LoadFromBytes([]byte(validTOML))
+	if err != nil {
+		t.Fatalf("LoadFromBytes() error: %v", err)
+	}
+	if store == nil {
+		t.Fatal("LoadFromBytes() returned nil store")
+	}
+
+	val, err := store.Resolve("claims_pipeline", "claims_db")
+	if err != nil {
+		t.Fatalf("Resolve() error: %v", err)
+	}
+	if val != "Server=claims;User Id=sa;Password=secret" {
+		t.Errorf("Resolve() = %q, want claims connection string", val)
+	}
+}
+
+func TestLoadEncrypted_RoundTrip(t *testing.T) {
+	identityPath, recipientsPath, _ := generateTestIdentity(t)
+
+	ciphertext, err := Encrypt([]byte(validTOML), recipientsPath)
+	if err != nil {
+		t.Fatalf("Encrypt() error: %v", err)
+	}
+
+	dir := t.TempDir()
+	encPath := filepath.Join(dir, "secrets.toml.age")
+	if err := os.WriteFile(encPath, ciphertext, 0600); err != nil {
+		t.Fatal(err)
+	}
+
+	store, err := LoadEncrypted(encPath, identityPath, "")
+	if err != nil {
+		t.Fatalf("LoadEncrypted() error: %v", err)
+	}
+	if store == nil {
+		t.Fatal("LoadEncrypted() returned nil store")
+	}
+
+	val, err := store.Resolve("claims_pipeline", "claims_db")
+	if err != nil {
+		t.Fatalf("Resolve() error: %v", err)
+	}
+	if val != "Server=claims;User Id=sa;Password=secret" {
+		t.Errorf("Resolve() = %q, want claims connection string", val)
+	}
+}
+
+func TestLoadEncrypted_RawKey(t *testing.T) {
+	identity, err := GenerateIdentity()
+	if err != nil {
+		t.Fatalf("GenerateIdentity() error: %v", err)
+	}
+
+	dir := t.TempDir()
+	recipientsPath := filepath.Join(dir, "recipients.txt")
+	if err := os.WriteFile(recipientsPath, []byte(identity.Recipient().String()+"\n"), 0644); err != nil {
+		t.Fatal(err)
+	}
+
+	ciphertext, err := Encrypt([]byte(validTOML), recipientsPath)
+	if err != nil {
+		t.Fatalf("Encrypt() error: %v", err)
+	}
+
+	encPath := filepath.Join(dir, "secrets.toml.age")
+	if err := os.WriteFile(encPath, ciphertext, 0600); err != nil {
+		t.Fatal(err)
+	}
+
+	t.Setenv("PIT_AGE_KEY", identity.String())
+
+	store, err := LoadEncrypted(encPath, "", "")
+	if err != nil {
+		t.Fatalf("LoadEncrypted() error: %v", err)
+	}
+
+	val, err := store.Resolve("global", "smtp_password")
+	if err != nil {
+		t.Fatalf("Resolve() error: %v", err)
+	}
+	if val != "global_smtp" {
+		t.Errorf("Resolve() = %q, want %q", val, "global_smtp")
+	}
+}
+
+func TestLoadEncrypted_EmptyPath(t *testing.T) {
+	store, err := LoadEncrypted("", "", "")
+	if err != nil {
+		t.Fatalf("LoadEncrypted('') error: %v", err)
+	}
+	if store != nil {
+		t.Error("LoadEncrypted('') should return nil store")
+	}
+}

@@ -52,16 +52,21 @@ func Load(path string) (*Store, error) {
 		return nil, fmt.Errorf("reading secrets file %q: %w", path, err)
 	}
 
+	return LoadFromBytes(raw)
+}
+
+// LoadFromBytes parses TOML secrets from raw bytes and returns a Store.
+func LoadFromBytes(data []byte) (*Store, error) {
 	var parsed map[string]interface{}
-	if err := toml.Unmarshal(raw, &parsed); err != nil {
-		return nil, fmt.Errorf("parsing secrets file %q: %w", path, err)
+	if err := toml.Unmarshal(data, &parsed); err != nil {
+		return nil, fmt.Errorf("parsing secrets: %w", err)
 	}
 
-	data := make(map[string]map[string]Secret)
+	store := make(map[string]map[string]Secret)
 	for scope, section := range parsed {
 		sectionMap, ok := section.(map[string]interface{})
 		if !ok {
-			return nil, fmt.Errorf("secrets file %q: section %q is not a table", path, scope)
+			return nil, fmt.Errorf("secrets: section %q is not a table", scope)
 		}
 
 		secrets := make(map[string]Secret)
@@ -74,19 +79,61 @@ func Load(path string) (*Store, error) {
 				for fk, fv := range v {
 					s, ok := fv.(string)
 					if !ok {
-						return nil, fmt.Errorf("secrets file %q: field %q.%q.%q must be a string", path, scope, key, fk)
+						return nil, fmt.Errorf("secrets: field %q.%q.%q must be a string", scope, key, fk)
 					}
 					fields[fk] = s
 				}
 				secrets[key] = Secret{Fields: fields}
 			default:
-				return nil, fmt.Errorf("secrets file %q: key %q.%q must be a string or table", path, scope, key)
+				return nil, fmt.Errorf("secrets: key %q.%q must be a string or table", scope, key)
 			}
 		}
-		data[scope] = secrets
+		store[scope] = secrets
 	}
 
-	return &Store{data: data}, nil
+	return &Store{data: store}, nil
+}
+
+// LoadEncrypted reads an age-encrypted secrets file, decrypts it, and returns a Store.
+// If path is empty, returns nil, nil. Identity resolution tries PIT_AGE_KEY env var
+// first (raw key), then falls back to file-based identity using identityPath or configIdentity.
+func LoadEncrypted(path, identityPath, configIdentity string) (*Store, error) {
+	if path == "" {
+		return nil, nil
+	}
+
+	ciphertext, err := os.ReadFile(path)
+	if err != nil {
+		return nil, fmt.Errorf("reading encrypted secrets %q: %w", path, err)
+	}
+
+	// Try raw key from environment first.
+	if rawKey := ResolveIdentityRaw(); rawKey != "" {
+		plaintext, err := DecryptWithRawKey(ciphertext, rawKey)
+		if err != nil {
+			return nil, fmt.Errorf("decrypting secrets with PIT_AGE_KEY: %w", err)
+		}
+		return LoadFromBytes(plaintext)
+	}
+
+	// Fall back to file-based identity.
+	idPath, err := ResolveIdentityPath(identityPath)
+	if err != nil {
+		// Try configIdentity as fallback.
+		if configIdentity != "" {
+			idPath, err = ResolveIdentityPath(configIdentity)
+		}
+		if err != nil {
+			return nil, fmt.Errorf("resolving identity for encrypted secrets: %w", err)
+		}
+	}
+
+	plaintext, err := DecryptWithFile(ciphertext, idPath)
+	if err != nil {
+		return nil, fmt.Errorf("decrypting secrets %q: %w", path, err)
+	}
+
+	return LoadFromBytes(plaintext)
 }
 
 // Resolve looks up a plain secret by key, checking the project-scoped section first

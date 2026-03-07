@@ -10,6 +10,8 @@ import (
 	"sync"
 	"time"
 
+	"crypto/sha256"
+
 	"github.com/druarnfield/pit/internal/config"
 	"github.com/druarnfield/pit/internal/gitrepo"
 	"github.com/druarnfield/pit/internal/loader"
@@ -102,6 +104,21 @@ func Execute(ctx context.Context, cfg *config.ProjectConfig, opts ExecuteOpts) (
 		sdkCancel()
 		sdkServer.Shutdown()
 	}()
+
+	// Record environment file hashes
+	if opts.MetaStore != nil {
+		envFiles := map[string]string{
+			"pit_toml":  filepath.Join(projectDir, "pit.toml"),
+			"uv_lock":   filepath.Join(projectDir, "uv.lock"),
+			"pyproject": filepath.Join(projectDir, "pyproject.toml"),
+		}
+		for hashType, path := range envFiles {
+			hash := hashFile(path)
+			if hash != "" {
+				opts.MetaStore.RecordEnvSnapshot(cfg.DAG.Name, hashType, hash, runID)
+			}
+		}
+	}
 
 	// Build Run from config
 	run := &Run{
@@ -656,6 +673,20 @@ func makeLoadDataHandler(store *secrets.Store, dagName string, dataDir string) s
 
 		return fmt.Sprintf("%d rows loaded", rows), nil
 	}
+}
+
+// hashFile returns the SHA-256 hex digest of the file at path, or "" on error.
+func hashFile(path string) string {
+	f, err := os.Open(path)
+	if err != nil {
+		return ""
+	}
+	defer f.Close()
+	h := sha256.New()
+	if _, err := io.Copy(h, f); err != nil {
+		return ""
+	}
+	return fmt.Sprintf("%x", h.Sum(nil))
 }
 
 // prefixWriter is an io.Writer that prepends a prefix to each line of output.

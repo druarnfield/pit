@@ -18,6 +18,16 @@ const (
 	StatusUpstreamFailed TaskStatus = "upstream_failed"
 )
 
+// MetadataRecorder records run and task metadata to a persistent store.
+type MetadataRecorder interface {
+	RecordRunStart(id, dagName, status, runDir, trigger string, startedAt time.Time) error
+	RecordRunEnd(id, status string, endedAt time.Time, errMsg string) error
+	RecordTaskStart(runID, taskName, status, logPath string, startedAt time.Time) error
+	RecordTaskEnd(runID, taskName, status string, endedAt time.Time, attempts int, errMsg string) error
+	RecordEnvSnapshot(dagName, hashType, hashValue, runID string) error
+	RecordOutput(runID, dagName, name, outputType, location string) error
+}
+
 // SecretsResolver resolves secrets by project scope.
 type SecretsResolver interface {
 	Resolve(project, key string) (string, error)

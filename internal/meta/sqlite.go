@@ -334,6 +334,41 @@ func (s *SQLiteStore) LatestRunPerDAG() ([]RunRecord, error) {
 		 ORDER BY r.dag_name`)
 }
 
+// RecordRunStart implements engine.MetadataRecorder.
+func (s *SQLiteStore) RecordRunStart(id, dagName, status, runDir, trigger string, startedAt time.Time) error {
+	return s.InsertRun(RunRecord{
+		ID: id, DAGName: dagName, Status: status,
+		StartedAt: startedAt, RunDir: runDir, Trigger: trigger,
+	})
+}
+
+// RecordRunEnd implements engine.MetadataRecorder.
+func (s *SQLiteStore) RecordRunEnd(id, status string, endedAt time.Time, errMsg string) error {
+	return s.UpdateRun(id, status, endedAt, errMsg)
+}
+
+// RecordTaskStart implements engine.MetadataRecorder.
+func (s *SQLiteStore) RecordTaskStart(runID, taskName, status, logPath string, startedAt time.Time) error {
+	return s.InsertTaskInstance(TaskInstanceRecord{
+		RunID: runID, TaskName: taskName, Status: status,
+		StartedAt: &startedAt, Attempts: 1, LogPath: logPath,
+	})
+}
+
+// RecordTaskEnd implements engine.MetadataRecorder.
+func (s *SQLiteStore) RecordTaskEnd(runID, taskName, status string, endedAt time.Time, attempts int, errMsg string) error {
+	return s.UpdateTaskInstance(runID, taskName, status, endedAt, attempts, errMsg)
+}
+
+// RecordOutput implements engine.MetadataRecorder.
+func (s *SQLiteStore) RecordOutput(runID, dagName, name, outputType, location string) error {
+	_, err := s.db.Exec(
+		`INSERT INTO outputs (run_id, dag_name, name, type, location) VALUES (?, ?, ?, ?, ?)`,
+		runID, dagName, name, nilIfEmpty(outputType), nilIfEmpty(location),
+	)
+	return err
+}
+
 // Compile-time interface satisfaction check.
 var _ Store = (*SQLiteStore)(nil)
 

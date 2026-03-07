@@ -12,6 +12,7 @@ import (
 	"github.com/druarnfield/pit/internal/config"
 	"github.com/druarnfield/pit/internal/dag"
 	"github.com/druarnfield/pit/internal/engine"
+	"github.com/druarnfield/pit/internal/meta"
 	"github.com/spf13/cobra"
 )
 
@@ -51,6 +52,13 @@ func newRunCmd() *cobra.Command {
 				return fmt.Errorf("validation failed with %d error(s)", len(errs))
 			}
 
+			// Open metadata store
+			metaStore, err := meta.Open(resolveMetadataDB())
+			if err != nil {
+				return fmt.Errorf("opening metadata store: %w", err)
+			}
+			defer metaStore.Close()
+
 			// Set up signal handling for graceful cancellation
 			ctx, stop := signal.NotifyContext(cmd.Context(), os.Interrupt, syscall.SIGTERM)
 			defer stop()
@@ -63,6 +71,7 @@ func newRunCmd() *cobra.Command {
 				SecretsPath:   secretsPath,
 				DBTDriver:     resolveDBTDriver(),
 				KeepArtifacts: resolveKeepArtifacts(cfg.DAG.KeepArtifacts),
+				MetaStore:     metaStore,
 			}
 
 			run, err := engine.Execute(ctx, cfg, opts)

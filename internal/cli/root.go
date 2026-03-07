@@ -95,6 +95,14 @@ func resolveKeepArtifacts(perProject []string) []string {
 	return config.DefaultKeepArtifacts
 }
 
+// resolveMetadataDB returns the metadata database path from workspace config or the default.
+func resolveMetadataDB() string {
+	if workspaceCfg != nil && workspaceCfg.MetadataDB != "" {
+		return workspaceCfg.MetadataDB
+	}
+	return filepath.Join(projectDir, "pit_metadata.db")
+}
+
 // Execute runs the root command.
 func Execute() {
 	if err := newRootCmd().Execute(); err != nil {

@@ -28,7 +28,9 @@ type ExecuteOpts struct {
 	SecretsPath   string   // path to secrets.toml (optional, empty = no secrets)
 	DataSeedDir   string   // if set, copy contents into data dir before execution
 	DBTDriver     string   // ODBC driver for dbt profiles (default: config.DefaultDBTDriver)
-	KeepArtifacts []string // which run subdirs to keep after completion (default: all)
+	KeepArtifacts []string           // which run subdirs to keep after completion (default: all)
+	MetaStore     MetadataRecorder   // nil = no metadata tracking
+	Trigger       string             // trigger source: "manual", "cron", "ftp_watch", "webhook"
 }
 
 // Execute runs a DAG to completion.

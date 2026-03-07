@@ -2,7 +2,9 @@ package scaffold
 
 import (
 	"fmt"
+	"io"
 	"os"
+	"os/exec"
 	"path/filepath"
 	"regexp"
 )
@@ -263,6 +265,102 @@ runner = "dbt"
 depends_on = ["run"]
 timeout = "30m"
 `, name)
+}
+
+// CreateWorkspace creates a new workspace directory with config, gitignore,
+// README, and a sample project.
+func CreateWorkspace(parentDir, name string, projectType ProjectType) error {
+	if !validName.MatchString(name) {
+		return fmt.Errorf("invalid workspace name %q: must match [a-z][a-z0-9_]*", name)
+	}
+
+	wsDir := filepath.Join(parentDir, name)
+	if _, err := os.Stat(wsDir); err == nil {
+		return fmt.Errorf("directory already exists: %s", wsDir)
+	}
+
+	if err := os.MkdirAll(wsDir, 0o755); err != nil {
+		return fmt.Errorf("creating workspace directory: %w", err)
+	}
+
+	files := map[string]string{
+		filepath.Join(wsDir, ".gitignore"):      workspaceGitignore(),
+		filepath.Join(wsDir, "pit_config.toml"): workspacePitConfig(),
+		filepath.Join(wsDir, "README.md"):       workspaceReadme(name),
+	}
+	if err := writeFiles(files); err != nil {
+		return err
+	}
+
+	if err := Create(wsDir, "sample_pipeline", projectType); err != nil {
+		return fmt.Errorf("creating sample project: %w", err)
+	}
+
+	if err := gitInit(wsDir); err != nil {
+		return fmt.Errorf("git init: %w", err)
+	}
+
+	return nil
+}
+
+func gitInit(dir string) error {
+	cmd := exec.Command("git", "init")
+	cmd.Dir = dir
+	cmd.Stdout = io.Discard
+	cmd.Stderr = io.Discard
+	return cmd.Run()
+}
+
+func workspaceGitignore() string {
+	return `runs/
+.venv/
+repo_cache/
+*.db
+secrets/
+`
+}
+
+func workspacePitConfig() string {
+	return `# Pit workspace configuration
+# See: https://github.com/druarnfield/pit
+
+# runs_dir = "runs"
+# repo_cache_dir = "repo_cache"
+# metadata_db = "pit_metadata.db"
+# secrets_dir = "secrets/secrets.toml"
+# api_token = ""
+# dbt_driver = "ODBC Driver 17 for SQL Server"
+# keep_artifacts = ["logs", "project", "data"]
+`
+}
+
+func workspaceReadme(name string) string {
+	return fmt.Sprintf(`# %s
+
+Pit workspace. See [Pit documentation](https://github.com/druarnfield/pit) for full details.
+
+## Layout
+
+`+"```"+`
+%s/
+├── pit_config.toml          # workspace configuration
+└── projects/                # DAG projects
+    └── sample_pipeline/     # sample project (pit run sample_pipeline)
+        ├── pit.toml         # DAG definition
+        └── tasks/           # task scripts
+`+"```"+`
+
+## Commands
+
+`+"```"+`bash
+pit validate                    # check all project configs
+pit run sample_pipeline         # run the sample DAG
+pit run sample_pipeline/hello   # run a single task
+pit init my_new_project         # add another project
+pit serve                       # start the scheduler
+pit status                      # view latest run status
+`+"```"+`
+`, name, name)
 }
 
 func dbtProjectYml(name string) string {

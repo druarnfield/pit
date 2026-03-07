@@ -311,6 +311,13 @@ curl -X POST http://localhost:9090/webhook/deploy_pipeline \
 # → 202 Accepted
 ```
 
+Add `?stream=true` to receive an SSE stream of the triggered run's logs instead of a fire-and-forget response:
+
+```bash
+curl -N -X POST -H "Authorization: Bearer $TOKEN" \
+  http://localhost:9090/webhook/my_dag?stream=true
+```
+
 The webhook listener only starts if at least one DAG has `[dag.webhook]` configured. All DAGs with a webhook share the same port; the URL path routes by DAG name.
 
 ## Metadata Store
@@ -365,8 +372,24 @@ sqlite3 pit_metadata.db "SELECT * FROM runs WHERE status='failed' ORDER BY start
 | `GET` | `/api/runs` | Recent runs across all DAGs (`?limit=N`, `?dag=name`) |
 | `GET` | `/api/runs/{id}` | Run detail with task instances |
 | `GET` | `/api/outputs` | Outputs registry (`?dag=name` filter) |
+| `GET` | `/api/runs/{id}/logs` | Stream run logs via SSE (`?lines=N` for last N lines) |
+| `GET` | `/api/dags/{name}/logs` | Stream latest run logs for a DAG via SSE |
 
 All responses are `application/json`. Times are RFC 3339 UTC.
+
+### Log Streaming (SSE)
+
+The `/logs` endpoints use Server-Sent Events for real-time log streaming. For running DAGs, logs stream live and close with a `complete` event when the run finishes. For finished runs, all log lines are sent followed by a `complete` event.
+
+```bash
+# Stream logs for a specific run
+curl -N http://localhost:9090/api/runs/20260307_143000.000_my_dag/logs
+
+# Stream latest run logs for a DAG (last 50 lines)
+curl -N http://localhost:9090/api/dags/my_dag/logs?lines=50
+```
+
+Events: `event: log` (structured JSON with timestamp, task, level, message) and `event: complete` (run status).
 
 ### Authentication
 

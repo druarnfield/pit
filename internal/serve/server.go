@@ -41,8 +41,9 @@ type Options struct {
 	RunsDir            string
 	RepoCacheDir       string
 	DBTDriver          string
-	WorkspaceArtifacts []string // workspace-level keep_artifacts (nil = use default)
-	WebhookPort        int      // port for inbound webhook HTTP server (0 = use default 9090)
+	WorkspaceArtifacts []string                // workspace-level keep_artifacts (nil = use default)
+	WebhookPort        int                     // port for inbound webhook HTTP server (0 = use default 9090)
+	MetaStore          engine.MetadataRecorder  // nil = no metadata tracking
 }
 
 // NewServer discovers projects, validates them, and registers triggers.
@@ -83,6 +84,7 @@ func NewServer(rootDir, secretsPath string, verbose bool, srvOpts Options) (*Ser
 			Verbose:      verbose,
 			SecretsPath:  secretsPath,
 			DBTDriver:    srvOpts.DBTDriver,
+			MetaStore:    srvOpts.MetaStore,
 		},
 		workspaceArtifacts: srvOpts.WorkspaceArtifacts,
 		activeRuns:         make(map[string]bool),
@@ -282,6 +284,7 @@ func (s *Server) handleEvent(ctx context.Context, ev trigger.Event, wg *sync.Wai
 		log.Printf("[%s] triggered by %s", ev.DAGName, ev.Source)
 
 		opts := s.opts
+		opts.Trigger = ev.Source
 
 		// Resolve keep_artifacts: per-project > workspace > default
 		opts.KeepArtifacts = resolveArtifacts(cfg.DAG.KeepArtifacts, s.workspaceArtifacts)

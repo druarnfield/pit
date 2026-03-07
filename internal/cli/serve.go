@@ -1,10 +1,12 @@
 package cli
 
 import (
+	"fmt"
 	"os"
 	"os/signal"
 	"syscall"
 
+	"github.com/druarnfield/pit/internal/meta"
 	"github.com/druarnfield/pit/internal/serve"
 	"github.com/spf13/cobra"
 )
@@ -17,6 +19,12 @@ func newServeCmd() *cobra.Command {
 		Short: "Run the scheduler (cron, FTP watch, and webhook triggers)",
 		Long:  "Start pit in serve mode. Monitors all projects for scheduled triggers, FTP file watches, and inbound webhooks, executing DAGs automatically.",
 		RunE: func(cmd *cobra.Command, args []string) error {
+			metaStore, err := meta.Open(resolveMetadataDB())
+			if err != nil {
+				return fmt.Errorf("opening metadata store: %w", err)
+			}
+			defer metaStore.Close()
+
 			var wsArtifacts []string
 			if workspaceCfg != nil {
 				wsArtifacts = workspaceCfg.KeepArtifacts
@@ -27,6 +35,7 @@ func newServeCmd() *cobra.Command {
 				DBTDriver:          resolveDBTDriver(),
 				WorkspaceArtifacts: wsArtifacts,
 				WebhookPort:        port,
+				MetaStore:          metaStore,
 			})
 			if err != nil {
 				return err

@@ -19,12 +19,13 @@ type Entry struct {
 
 // completedRun records the final status of a finished run.
 type completedRun struct {
-	Status string
+	Status      string
+	CompletedAt time.Time
 }
 
 // Hub is an in-process pub/sub dispatcher keyed by run ID.
 type Hub struct {
-	mu          sync.Mutex
+	mu          sync.RWMutex
 	subscribers map[string][]chan Entry
 	active      map[string]bool
 	completed   map[string]completedRun
@@ -51,15 +52,15 @@ func (h *Hub) Activate(runID string) {
 
 // IsActive returns true if the run is currently active.
 func (h *Hub) IsActive(runID string) bool {
-	h.mu.Lock()
-	defer h.mu.Unlock()
+	h.mu.RLock()
+	defer h.mu.RUnlock()
 	return h.active[runID]
 }
 
 // RunStatus returns the final status and whether the run has completed.
 func (h *Hub) RunStatus(runID string) (status string, done bool) {
-	h.mu.Lock()
-	defer h.mu.Unlock()
+	h.mu.RLock()
+	defer h.mu.RUnlock()
 	cr, ok := h.completed[runID]
 	if !ok {
 		return "", false
@@ -94,6 +95,7 @@ func (h *Hub) Unsubscribe(runID string, ch <-chan Entry) {
 	subs := h.subscribers[runID]
 	for i, s := range subs {
 		if s == ch {
+			close(s)
 			h.subscribers[runID] = append(subs[:i], subs[i+1:]...)
 			return
 		}
@@ -120,11 +122,24 @@ func (h *Hub) Complete(runID string, status string) {
 	h.mu.Lock()
 	defer h.mu.Unlock()
 
-	h.completed[runID] = completedRun{Status: status}
+	h.completed[runID] = completedRun{Status: status, CompletedAt: time.Now()}
 	delete(h.active, runID)
 
 	for _, ch := range h.subscribers[runID] {
 		close(ch)
 	}
 	delete(h.subscribers, runID)
+}
+
+// Purge removes completed runs older than the given duration.
+func (h *Hub) Purge(olderThan time.Duration) {
+	h.mu.Lock()
+	defer h.mu.Unlock()
+
+	cutoff := time.Now().Add(-olderThan)
+	for id, cr := range h.completed {
+		if cr.CompletedAt.Before(cutoff) {
+			delete(h.completed, id)
+		}
+	}
 }

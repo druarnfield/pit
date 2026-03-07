@@ -145,11 +145,14 @@ func TestHub_UnsubscribeCleanup(t *testing.T) {
 	}
 	h.Publish("run-1", entry)
 
-	// ch1 should NOT receive the entry (was unsubscribed).
+	// ch1 should be closed (was unsubscribed).
 	select {
-	case <-ch1:
-		t.Error("unsubscribed channel ch1 received an entry")
+	case _, ok := <-ch1:
+		if ok {
+			t.Error("unsubscribed channel ch1 should be closed")
+		}
 	default:
+		t.Error("unsubscribed channel ch1 should be closed, but read blocked")
 	}
 
 	// ch2 should still receive the entry.
@@ -160,6 +163,27 @@ func TestHub_UnsubscribeCleanup(t *testing.T) {
 		}
 	case <-time.After(time.Second):
 		t.Fatal("ch2: timed out waiting for entry")
+	}
+}
+
+func TestHub_Purge(t *testing.T) {
+	h := New()
+	defer h.Close()
+	h.Activate("run-1")
+	h.Complete("run-1", "success")
+
+	// Should still be there
+	status, done := h.RunStatus("run-1")
+	if !done || status != "success" {
+		t.Errorf("before purge: status=%q done=%v", status, done)
+	}
+
+	// Purge with zero duration removes everything
+	h.Purge(0)
+
+	_, done = h.RunStatus("run-1")
+	if done {
+		t.Error("after purge: expected run to be removed")
 	}
 }
 

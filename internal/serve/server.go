@@ -317,9 +317,12 @@ func (s *Server) webhookStreamRun(w http.ResponseWriter, r *http.Request, dagNam
 	runID := engine.GenerateRunID(dagName)
 	opts.RunID = runID
 
-	// Activate in hub before starting execution
+	// Activate and subscribe in hub BEFORE starting execution
+	// so no log entries are missed
+	var ch <-chan loghub.Entry
 	if s.logHub != nil {
 		s.logHub.Activate(runID)
+		ch = s.logHub.Subscribe(runID)
 	}
 
 	// Start execution in background
@@ -328,6 +331,10 @@ func (s *Server) webhookStreamRun(w http.ResponseWriter, r *http.Request, dagNam
 		run, err := engine.Execute(r.Context(), cfg, opts)
 		if err != nil {
 			log.Printf("[%s] execution error: %v", dagName, err)
+			// Ensure hub is completed so SSE subscriber unblocks
+			if s.logHub != nil {
+				s.logHub.Complete(runID, "failed")
+			}
 			return
 		}
 		log.Printf("[%s] completed: %s", dagName, run.Status)
@@ -345,13 +352,12 @@ func (s *Server) webhookStreamRun(w http.ResponseWriter, r *http.Request, dagNam
 	w.Header().Set("Connection", "keep-alive")
 	w.WriteHeader(http.StatusOK)
 
-	if s.logHub == nil {
+	if ch == nil {
 		fmt.Fprintf(w, "event: complete\ndata: {\"status\":\"unknown\"}\n\n")
 		flusher.Flush()
 		return
 	}
 
-	ch := s.logHub.Subscribe(runID)
 	defer s.logHub.Unsubscribe(runID, ch)
 
 	for {

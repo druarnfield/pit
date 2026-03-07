@@ -15,6 +15,7 @@ import (
 	"github.com/druarnfield/pit/internal/config"
 	"github.com/druarnfield/pit/internal/dag"
 	"github.com/druarnfield/pit/internal/engine"
+	"github.com/druarnfield/pit/internal/loghub"
 	pitftp "github.com/druarnfield/pit/internal/ftp"
 	"github.com/druarnfield/pit/internal/meta"
 	"github.com/druarnfield/pit/internal/secrets"
@@ -30,6 +31,7 @@ type Server struct {
 	ftpConfigs    map[string]*config.FTPWatchConfig
 	webhookTokens map[string]string // dagName → resolved bearer token
 	webhookPort   int
+	logHub        *loghub.Hub
 	eventCh            chan trigger.Event
 	opts               engine.ExecuteOpts
 	workspaceArtifacts []string // workspace-level keep_artifacts (nil = use default)
@@ -71,6 +73,8 @@ func NewServer(rootDir, secretsPath string, verbose bool, srvOpts Options) (*Ser
 		}
 	}
 
+	logHub := loghub.New()
+
 	webhookPort := srvOpts.WebhookPort
 	if webhookPort == 0 {
 		webhookPort = 9090
@@ -83,6 +87,7 @@ func NewServer(rootDir, secretsPath string, verbose bool, srvOpts Options) (*Ser
 		ftpConfigs:    make(map[string]*config.FTPWatchConfig),
 		webhookTokens: make(map[string]string),
 		webhookPort:   webhookPort,
+		logHub:        logHub,
 		eventCh:       make(chan trigger.Event, 64),
 		opts: engine.ExecuteOpts{
 			RunsDir:      srvOpts.RunsDir,
@@ -91,6 +96,7 @@ func NewServer(rootDir, secretsPath string, verbose bool, srvOpts Options) (*Ser
 			SecretsPath:  secretsPath,
 			DBTDriver:    srvOpts.DBTDriver,
 			MetaStore:    srvOpts.MetaStore,
+			LogHub:       logHub,
 		},
 		workspaceArtifacts: srvOpts.WorkspaceArtifacts,
 		apiToken:           srvOpts.APIToken,
@@ -99,7 +105,7 @@ func NewServer(rootDir, secretsPath string, verbose bool, srvOpts Options) (*Ser
 
 	// Create API handler if metadata store is available
 	if srvOpts.MetaQueryStore != nil {
-		s.apiHandler = api.NewHandler(configs, srvOpts.MetaQueryStore, srvOpts.APIToken, nil, srvOpts.RunsDir)
+		s.apiHandler = api.NewHandler(configs, srvOpts.MetaQueryStore, srvOpts.APIToken, logHub, srvOpts.RunsDir)
 	}
 
 	// Register triggers for each DAG

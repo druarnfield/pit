@@ -188,6 +188,7 @@ runner = "$ node"              # runs: node tasks/transform.js
 | `pit serve [--port N]` | Run the scheduler with cron, FTP watch, and webhook triggers (webhook port default: 9090) |
 | `pit logs <dag>[/<task>]` | View task logs (`--list` for runs, `--run-id` for specific run) |
 | `pit outputs` | List declared outputs (`--project`, `--type`, `--location` filters) |
+| `pit status` | Show latest run status for each DAG (requires metadata store) |
 
 ### Global Flags
 
@@ -307,6 +308,44 @@ curl -X POST http://localhost:9090/webhook/deploy_pipeline \
 
 The webhook listener only starts if at least one DAG has `[dag.webhook]` configured. All DAGs with a webhook share the same port; the URL path routes by DAG name.
 
+## Metadata Store
+
+Pit records run history, task results, environment snapshots, and declared outputs in a SQLite database. This enables `pit status`, and is the foundation for the future REST API.
+
+The database is created automatically at `pit_metadata.db` in the workspace root on first use. Configure a custom path in `pit_config.toml`:
+
+```toml
+metadata_db = "path/to/pit_metadata.db"
+```
+
+### What's tracked
+
+| Data | Description |
+|------|-------------|
+| **Run history** | Every DAG execution: ID, status, timing, trigger source |
+| **Task instances** | Per-task status, attempt count, errors, log file paths |
+| **Environment snapshots** | SHA-256 hashes of `pit.toml`, `uv.lock`, `pyproject.toml` — recorded only when they change |
+| **Outputs** | Declared outputs from `[[outputs]]` sections, recorded on successful runs |
+
+### Querying status
+
+```bash
+pit status
+```
+
+```
+DAG                  Last Run              Status   Duration
+───                  ────────              ──────   ────────
+claims_pipeline      2026-03-07 14:30:00   success  2m15s
+daily_report         2026-03-07 06:00:00   failed   42s
+```
+
+The database can also be queried directly with `sqlite3`:
+
+```bash
+sqlite3 pit_metadata.db "SELECT * FROM runs WHERE status='failed' ORDER BY started_at DESC LIMIT 5"
+```
+
 ## Workspace Configuration
 
 Create a `pit_config.toml` in the project root to set workspace-level defaults:
@@ -326,6 +365,7 @@ keep_artifacts = ["logs", "project", "data"]
 | `repo_cache_dir` | `"repo_cache"` | Directory for persistent git repository clones |
 | `dbt_driver` | `"ODBC Driver 17 for SQL Server"` | ODBC driver for dbt profiles |
 | `keep_artifacts` | `["logs", "project", "data"]` | Which run subdirs to keep after completion |
+| `metadata_db` | `"pit_metadata.db"` | Path to SQLite metadata database |
 
 All fields are optional. Relative paths are resolved from the project root. CLI flags take precedence if both are set.
 
@@ -600,12 +640,10 @@ The following features are planned but not yet implemented. See `pit-architectur
 ### Near-term
 
 - **`pit sync`** — Sync Python environments. Hash `uv.lock` files, only run `uv sync` for changed lockfiles. Parallel sync across projects.
-- **`pit status`** — Show DAG and task status from run history. Recent runs, success/failure counts, last run timestamps.
 - **Cross-project requirements** — Temporal dependencies between DAGs (`requires = { max_age = "24h" }`). Check SQLite run history at DAG start.
 
 ### Mid-term
 
-- **SQLite metadata store** — Persistent run history, task instance tracking, environment hashes. WAL mode for concurrent access.
 - **Notifications** — Email on DAG failure via SMTP connector, outbound webhook support for Slack/Teams.
 - **Additional Go connectors** — SMTP, HTTP, Minio/S3 — exposed via SDK socket.
 

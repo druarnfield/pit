@@ -32,12 +32,13 @@ name = "hello"
 script = "tasks/hello.sh"
 `)
 
-	_, err := NewServer(dir, "", false, Options{})
-	if err == nil {
-		t.Fatal("NewServer() expected error for no triggers, got nil")
+	// No triggers is a warning (API-only mode), not an error
+	srv, err := NewServer(dir, "", false, Options{})
+	if err != nil {
+		t.Fatalf("NewServer() unexpected error: %v", err)
 	}
-	if !strings.Contains(err.Error(), "no triggers") {
-		t.Errorf("error = %q, want it to contain 'no triggers'", err)
+	if srv == nil {
+		t.Fatal("NewServer() returned nil server")
 	}
 }
 

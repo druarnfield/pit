@@ -57,6 +57,286 @@ func (s *SQLiteStore) currentVersion() int {
 	return v
 }
 
+// nilIfEmpty returns nil for empty strings (for nullable TEXT columns).
+func nilIfEmpty(s string) *string {
+	if s == "" {
+		return nil
+	}
+	return &s
+}
+
+// InsertRun inserts a new run record into the database.
+func (s *SQLiteStore) InsertRun(r RunRecord) error {
+	var endedAt *string
+	if r.EndedAt != nil {
+		v := r.EndedAt.UTC().Format(time.RFC3339)
+		endedAt = &v
+	}
+	_, err := s.db.Exec(
+		`INSERT INTO runs (id, dag_name, status, started_at, ended_at, run_dir, trigger_source, error)
+		 VALUES (?, ?, ?, ?, ?, ?, ?, ?)`,
+		r.ID, r.DAGName, r.Status,
+		r.StartedAt.UTC().Format(time.RFC3339),
+		endedAt, r.RunDir, nilIfEmpty(r.Trigger), nilIfEmpty(r.Error),
+	)
+	return err
+}
+
+// UpdateRun updates the status, ended_at, and error for an existing run.
+func (s *SQLiteStore) UpdateRun(id, status string, endedAt time.Time, errMsg string) error {
+	_, err := s.db.Exec(
+		`UPDATE runs SET status = ?, ended_at = ?, error = ? WHERE id = ?`,
+		status, endedAt.UTC().Format(time.RFC3339), nilIfEmpty(errMsg), id,
+	)
+	return err
+}
+
+// InsertTaskInstance inserts a new task instance record.
+func (s *SQLiteStore) InsertTaskInstance(ti TaskInstanceRecord) error {
+	var startedAt, endedAt *string
+	if ti.StartedAt != nil {
+		v := ti.StartedAt.UTC().Format(time.RFC3339)
+		startedAt = &v
+	}
+	if ti.EndedAt != nil {
+		v := ti.EndedAt.UTC().Format(time.RFC3339)
+		endedAt = &v
+	}
+	_, err := s.db.Exec(
+		`INSERT INTO task_instances (run_id, task_name, status, started_at, ended_at, attempts, error, log_path)
+		 VALUES (?, ?, ?, ?, ?, ?, ?, ?)`,
+		ti.RunID, ti.TaskName, ti.Status, startedAt, endedAt,
+		ti.Attempts, nilIfEmpty(ti.Error), nilIfEmpty(ti.LogPath),
+	)
+	return err
+}
+
+// UpdateTaskInstance updates a task instance's status, ended_at, attempts, and error.
+func (s *SQLiteStore) UpdateTaskInstance(runID, taskName, status string, endedAt time.Time, attempts int, errMsg string) error {
+	_, err := s.db.Exec(
+		`UPDATE task_instances SET status = ?, ended_at = ?, attempts = ?, error = ? WHERE run_id = ? AND task_name = ?`,
+		status, endedAt.UTC().Format(time.RFC3339), attempts, nilIfEmpty(errMsg), runID, taskName,
+	)
+	return err
+}
+
+// RecordEnvSnapshot records an environment snapshot, skipping if the latest hash matches.
+func (s *SQLiteStore) RecordEnvSnapshot(dagName, hashType, hashValue, runID string) error {
+	var latest sql.NullString
+	err := s.db.QueryRow(
+		`SELECT hash_value FROM env_snapshots
+		 WHERE dag_name = ? AND hash_type = ?
+		 ORDER BY first_seen DESC LIMIT 1`,
+		dagName, hashType,
+	).Scan(&latest)
+	if err != nil && err != sql.ErrNoRows {
+		return err
+	}
+	if latest.Valid && latest.String == hashValue {
+		return nil
+	}
+	_, err = s.db.Exec(
+		`INSERT INTO env_snapshots (dag_name, hash_type, hash_value, first_seen, run_id)
+		 VALUES (?, ?, ?, ?, ?)`,
+		dagName, hashType, hashValue, time.Now().UTC().Format(time.RFC3339), runID,
+	)
+	return err
+}
+
+// RecordOutputs batch-inserts output records in a transaction.
+func (s *SQLiteStore) RecordOutputs(runID, dagName string, outputs []OutputRecord) error {
+	if len(outputs) == 0 {
+		return nil
+	}
+	tx, err := s.db.Begin()
+	if err != nil {
+		return err
+	}
+	stmt, err := tx.Prepare(
+		`INSERT INTO outputs (run_id, dag_name, name, type, location)
+		 VALUES (?, ?, ?, ?, ?)`,
+	)
+	if err != nil {
+		tx.Rollback()
+		return err
+	}
+	defer stmt.Close()
+	for _, o := range outputs {
+		if _, err := stmt.Exec(runID, dagName, o.Name, nilIfEmpty(o.Type), nilIfEmpty(o.Location)); err != nil {
+			tx.Rollback()
+			return err
+		}
+	}
+	return tx.Commit()
+}
+
+// scanRuns is a helper to execute a query and scan the results into RunRecords.
+func (s *SQLiteStore) scanRuns(query string, args ...any) ([]RunRecord, error) {
+	rows, err := s.db.Query(query, args...)
+	if err != nil {
+		return nil, err
+	}
+	defer rows.Close()
+
+	var runs []RunRecord
+	for rows.Next() {
+		var r RunRecord
+		var startedAt string
+		var endedAt, trigger, errMsg sql.NullString
+		if err := rows.Scan(&r.ID, &r.DAGName, &r.Status, &startedAt, &endedAt, &r.RunDir, &trigger, &errMsg); err != nil {
+			return nil, err
+		}
+		r.StartedAt, _ = time.Parse(time.RFC3339, startedAt)
+		if endedAt.Valid {
+			t, _ := time.Parse(time.RFC3339, endedAt.String)
+			r.EndedAt = &t
+		}
+		if trigger.Valid {
+			r.Trigger = trigger.String
+		}
+		if errMsg.Valid {
+			r.Error = errMsg.String
+		}
+		runs = append(runs, r)
+	}
+	return runs, rows.Err()
+}
+
+// LatestRuns returns the most recent runs, optionally filtered by DAG name.
+func (s *SQLiteStore) LatestRuns(dagName string, limit int) ([]RunRecord, error) {
+	if dagName == "" {
+		return s.scanRuns(
+			`SELECT id, dag_name, status, started_at, ended_at, run_dir, trigger_source, error
+			 FROM runs ORDER BY started_at DESC LIMIT ?`, limit)
+	}
+	return s.scanRuns(
+		`SELECT id, dag_name, status, started_at, ended_at, run_dir, trigger_source, error
+		 FROM runs WHERE dag_name = ? ORDER BY started_at DESC LIMIT ?`, dagName, limit)
+}
+
+// RunsByStatus returns runs filtered by status.
+func (s *SQLiteStore) RunsByStatus(status string, limit int) ([]RunRecord, error) {
+	return s.scanRuns(
+		`SELECT id, dag_name, status, started_at, ended_at, run_dir, trigger_source, error
+		 FROM runs WHERE status = ? ORDER BY started_at DESC LIMIT ?`, status, limit)
+}
+
+// RunDetail returns a run and its task instances, or nil,nil,nil if not found.
+func (s *SQLiteStore) RunDetail(runID string) (*RunRecord, []TaskInstanceRecord, error) {
+	runs, err := s.scanRuns(
+		`SELECT id, dag_name, status, started_at, ended_at, run_dir, trigger_source, error
+		 FROM runs WHERE id = ?`, runID)
+	if err != nil {
+		return nil, nil, err
+	}
+	if len(runs) == 0 {
+		return nil, nil, nil
+	}
+	run := runs[0]
+
+	rows, err := s.db.Query(
+		`SELECT run_id, task_name, status, started_at, ended_at, attempts, error, log_path
+		 FROM task_instances WHERE run_id = ?`, runID)
+	if err != nil {
+		return &run, nil, err
+	}
+	defer rows.Close()
+
+	var tasks []TaskInstanceRecord
+	for rows.Next() {
+		var ti TaskInstanceRecord
+		var startedAt, endedAt, errMsg, logPath sql.NullString
+		if err := rows.Scan(&ti.RunID, &ti.TaskName, &ti.Status, &startedAt, &endedAt, &ti.Attempts, &errMsg, &logPath); err != nil {
+			return &run, nil, err
+		}
+		if startedAt.Valid {
+			t, _ := time.Parse(time.RFC3339, startedAt.String)
+			ti.StartedAt = &t
+		}
+		if endedAt.Valid {
+			t, _ := time.Parse(time.RFC3339, endedAt.String)
+			ti.EndedAt = &t
+		}
+		if errMsg.Valid {
+			ti.Error = errMsg.String
+		}
+		if logPath.Valid {
+			ti.LogPath = logPath.String
+		}
+		tasks = append(tasks, ti)
+	}
+	return &run, tasks, rows.Err()
+}
+
+// EnvHistory returns environment snapshot history for a DAG and hash type.
+func (s *SQLiteStore) EnvHistory(dagName, hashType string, limit int) ([]EnvSnapshotRecord, error) {
+	rows, err := s.db.Query(
+		`SELECT id, dag_name, hash_type, hash_value, first_seen, run_id
+		 FROM env_snapshots WHERE dag_name = ? AND hash_type = ?
+		 ORDER BY first_seen DESC LIMIT ?`, dagName, hashType, limit)
+	if err != nil {
+		return nil, err
+	}
+	defer rows.Close()
+
+	var snaps []EnvSnapshotRecord
+	for rows.Next() {
+		var e EnvSnapshotRecord
+		var firstSeen string
+		var runID sql.NullString
+		if err := rows.Scan(&e.ID, &e.DAGName, &e.HashType, &e.HashValue, &firstSeen, &runID); err != nil {
+			return nil, err
+		}
+		e.FirstSeen, _ = time.Parse(time.RFC3339, firstSeen)
+		if runID.Valid {
+			e.RunID = runID.String
+		}
+		snaps = append(snaps, e)
+	}
+	return snaps, rows.Err()
+}
+
+// OutputsByRun returns outputs for a given run, ordered by name.
+func (s *SQLiteStore) OutputsByRun(runID string) ([]OutputRecord, error) {
+	rows, err := s.db.Query(
+		`SELECT run_id, dag_name, name, type, location
+		 FROM outputs WHERE run_id = ? ORDER BY name`, runID)
+	if err != nil {
+		return nil, err
+	}
+	defer rows.Close()
+
+	var outs []OutputRecord
+	for rows.Next() {
+		var o OutputRecord
+		var typ, loc sql.NullString
+		if err := rows.Scan(&o.RunID, &o.DAGName, &o.Name, &typ, &loc); err != nil {
+			return nil, err
+		}
+		if typ.Valid {
+			o.Type = typ.String
+		}
+		if loc.Valid {
+			o.Location = loc.String
+		}
+		outs = append(outs, o)
+	}
+	return outs, rows.Err()
+}
+
+// LatestRunPerDAG returns the most recent run for each DAG.
+func (s *SQLiteStore) LatestRunPerDAG() ([]RunRecord, error) {
+	return s.scanRuns(
+		`SELECT r.id, r.dag_name, r.status, r.started_at, r.ended_at, r.run_dir, r.trigger_source, r.error
+		 FROM runs r
+		 INNER JOIN (SELECT dag_name, MAX(started_at) AS max_started FROM runs GROUP BY dag_name) sub
+		 ON r.dag_name = sub.dag_name AND r.started_at = sub.max_started
+		 ORDER BY r.dag_name`)
+}
+
+// Compile-time interface satisfaction check.
+var _ Store = (*SQLiteStore)(nil)
+
 func (s *SQLiteStore) migrate() error {
 	if _, err := s.db.Exec(`CREATE TABLE IF NOT EXISTS schema_version (
 		version    INTEGER PRIMARY KEY,

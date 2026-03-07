@@ -95,6 +95,14 @@ func resolveKeepArtifacts(perProject []string) []string {
 	return config.DefaultKeepArtifacts
 }
 
+// resolveAPIToken returns the API bearer token from workspace config (empty = no auth).
+func resolveAPIToken() string {
+	if workspaceCfg != nil {
+		return workspaceCfg.APIToken
+	}
+	return ""
+}
+
 // resolveMetadataDB returns the metadata database path from workspace config or the default.
 func resolveMetadataDB() string {
 	if workspaceCfg != nil && workspaceCfg.MetadataDB != "" {

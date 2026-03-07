@@ -31,6 +31,7 @@ type Server struct {
 	eventCh            chan trigger.Event
 	opts               engine.ExecuteOpts
 	workspaceArtifacts []string // workspace-level keep_artifacts (nil = use default)
+	apiToken           string
 
 	mu         sync.Mutex
 	activeRuns map[string]bool
@@ -44,6 +45,7 @@ type Options struct {
 	WorkspaceArtifacts []string                // workspace-level keep_artifacts (nil = use default)
 	WebhookPort        int                     // port for inbound webhook HTTP server (0 = use default 9090)
 	MetaStore          engine.MetadataRecorder  // nil = no metadata tracking
+	APIToken           string                   // optional bearer token for /api/ endpoints (empty = no auth)
 }
 
 // NewServer discovers projects, validates them, and registers triggers.
@@ -87,6 +89,7 @@ func NewServer(rootDir, secretsPath string, verbose bool, srvOpts Options) (*Ser
 			MetaStore:    srvOpts.MetaStore,
 		},
 		workspaceArtifacts: srvOpts.WorkspaceArtifacts,
+		apiToken:           srvOpts.APIToken,
 		activeRuns:         make(map[string]bool),
 	}
 

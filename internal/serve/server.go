@@ -11,10 +11,12 @@ import (
 	"strings"
 	"sync"
 
+	"github.com/druarnfield/pit/internal/api"
 	"github.com/druarnfield/pit/internal/config"
 	"github.com/druarnfield/pit/internal/dag"
 	"github.com/druarnfield/pit/internal/engine"
 	pitftp "github.com/druarnfield/pit/internal/ftp"
+	"github.com/druarnfield/pit/internal/meta"
 	"github.com/druarnfield/pit/internal/secrets"
 	"github.com/druarnfield/pit/internal/trigger"
 )
@@ -32,6 +34,7 @@ type Server struct {
 	opts               engine.ExecuteOpts
 	workspaceArtifacts []string // workspace-level keep_artifacts (nil = use default)
 	apiToken           string
+	apiHandler         http.Handler
 
 	mu         sync.Mutex
 	activeRuns map[string]bool
@@ -45,6 +48,7 @@ type Options struct {
 	WorkspaceArtifacts []string                // workspace-level keep_artifacts (nil = use default)
 	WebhookPort        int                     // port for inbound webhook HTTP server (0 = use default 9090)
 	MetaStore          engine.MetadataRecorder  // nil = no metadata tracking
+	MetaQueryStore     meta.Store               // for API query endpoints (can be same instance as MetaStore)
 	APIToken           string                   // optional bearer token for /api/ endpoints (empty = no auth)
 }
 
@@ -93,6 +97,11 @@ func NewServer(rootDir, secretsPath string, verbose bool, srvOpts Options) (*Ser
 		activeRuns:         make(map[string]bool),
 	}
 
+	// Create API handler if metadata store is available
+	if srvOpts.MetaQueryStore != nil {
+		s.apiHandler = api.NewHandler(configs, srvOpts.MetaQueryStore, srvOpts.APIToken)
+	}
+
 	// Register triggers for each DAG
 	for dagName, cfg := range configs {
 		// Validate before registering
@@ -136,7 +145,7 @@ func NewServer(rootDir, secretsPath string, verbose bool, srvOpts Options) (*Ser
 	}
 
 	if len(s.triggers) == 0 && len(s.webhookTokens) == 0 {
-		return nil, fmt.Errorf("no triggers registered (set schedule, ftp_watch, or webhook in at least one DAG)")
+		log.Println("warning: no triggers registered (API-only mode)")
 	}
 
 	return s, nil
@@ -164,29 +173,33 @@ func (s *Server) Start(ctx context.Context) error {
 		}(t)
 	}
 
-	// Launch webhook HTTP server if any DAGs have webhooks configured
-	if len(s.webhookTokens) > 0 {
-		mux := http.NewServeMux()
-		mux.HandleFunc("/webhook/", s.webhookHandler)
-		httpSrv := &http.Server{
-			Addr:    fmt.Sprintf(":%d", s.webhookPort),
-			Handler: mux,
-		}
-		triggerWg.Add(1)
-		go func() {
-			defer triggerWg.Done()
-			log.Printf("pit serve: webhook listener on :%d (%d DAG(s))", s.webhookPort, len(s.webhookTokens))
-			if err := httpSrv.ListenAndServe(); err != nil && err != http.ErrServerClosed {
-				log.Printf("webhook server error: %v", err)
-			}
-		}()
-		go func() {
-			<-triggerCtx.Done()
-			if err := httpSrv.Shutdown(context.Background()); err != nil {
-				log.Printf("webhook server shutdown error: %v", err)
-			}
-		}()
+	// Start HTTP server (API + webhooks)
+	mux := http.NewServeMux()
+	if s.apiHandler != nil {
+		mux.Handle("/api/", s.apiHandler)
 	}
+	if len(s.webhookTokens) > 0 {
+		mux.HandleFunc("/webhook/", s.webhookHandler)
+	}
+
+	httpSrv := &http.Server{
+		Addr:    fmt.Sprintf(":%d", s.webhookPort),
+		Handler: mux,
+	}
+	triggerWg.Add(1)
+	go func() {
+		defer triggerWg.Done()
+		log.Printf("pit serve: HTTP server on :%d", s.webhookPort)
+		if err := httpSrv.ListenAndServe(); err != nil && err != http.ErrServerClosed {
+			log.Printf("HTTP server error: %v", err)
+		}
+	}()
+	go func() {
+		<-triggerCtx.Done()
+		if err := httpSrv.Shutdown(context.Background()); err != nil {
+			log.Printf("HTTP server shutdown error: %v", err)
+		}
+	}()
 
 	// Process events
 	var runWg sync.WaitGroup

@@ -36,6 +36,7 @@ func newServeCmd() *cobra.Command {
 				WorkspaceArtifacts: wsArtifacts,
 				WebhookPort:        port,
 				MetaStore:          metaStore,
+				MetaQueryStore:     metaStore,
 				APIToken:           resolveAPIToken(),
 			})
 			if err != nil {

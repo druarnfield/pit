@@ -8,6 +8,9 @@ import (
 	"sort"
 	"strings"
 
+	"time"
+
+	"github.com/druarnfield/pit/internal/meta"
 	"github.com/druarnfield/pit/internal/secrets"
 	"github.com/spf13/cobra"
 )
@@ -251,6 +254,9 @@ func newSecretsSetCmd() *cobra.Command {
 				}
 			}
 
+			oldPlaintext := make([]byte, len(plaintext))
+			copy(oldPlaintext, plaintext)
+
 			var updated []byte
 			var err error
 
@@ -288,6 +294,27 @@ func newSecretsSetCmd() *cobra.Command {
 
 			if err := os.WriteFile(secretsPath, ciphertext, 0644); err != nil {
 				return fmt.Errorf("writing encrypted file: %w", err)
+			}
+
+			// Record audit event
+			if metaDBPath := resolveMetadataDB(); metaDBPath != "" {
+				if metaStore, err := meta.Open(metaDBPath); err == nil {
+					defer metaStore.Close()
+					eventType := "created"
+					if len(oldPlaintext) > 0 {
+						if oldStore, err := secrets.LoadFromBytes(oldPlaintext); err == nil {
+							if _, err := oldStore.Resolve(project, key); err == nil {
+								eventType = "updated"
+							}
+						}
+					}
+					metaStore.RecordSecretEvent(meta.SecretAuditRecord{
+						EventType: eventType,
+						Project:   project,
+						SecretKey: key,
+						Timestamp: time.Now(),
+					})
+				}
 			}
 
 			fmt.Fprintf(cmd.OutOrStdout(), "Secret %q set in project %q\n", key, project)
@@ -369,6 +396,19 @@ func newSecretsRemoveCmd() *cobra.Command {
 
 			if err := os.WriteFile(secretsPath, ciphertext, 0644); err != nil {
 				return fmt.Errorf("writing encrypted file: %w", err)
+			}
+
+			// Record audit event
+			if metaDBPath := resolveMetadataDB(); metaDBPath != "" {
+				if metaStore, err := meta.Open(metaDBPath); err == nil {
+					defer metaStore.Close()
+					metaStore.RecordSecretEvent(meta.SecretAuditRecord{
+						EventType: "deleted",
+						Project:   project,
+						SecretKey: key,
+						Timestamp: time.Now(),
+					})
+				}
 			}
 
 			fmt.Fprintf(cmd.OutOrStdout(), "Secret %q removed from project %q\n", key, project)

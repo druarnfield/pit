@@ -194,6 +194,14 @@ runner = "$ node"              # runs: node tasks/transform.js
 | `pit logs <dag>[/<task>]` | View task logs (`--list` for runs, `--run-id` for specific run) |
 | `pit outputs` | List declared outputs (`--project`, `--type`, `--location` filters) |
 | `pit status` | Show latest run status for each DAG (requires metadata store) |
+| `pit secrets keygen` | Generate age identity, print public key |
+| `pit secrets encrypt` | One-time migration from plaintext secrets.toml |
+| `pit secrets edit` | Decrypt, open in `$EDITOR`, re-encrypt |
+| `pit secrets set` | Set a plain or structured secret |
+| `pit secrets get` | Print a secret value |
+| `pit secrets list` | List secret keys (not values) |
+| `pit secrets remove` | Remove a secret |
+| `pit secrets add-recipient` | Add recipient, re-encrypt |
 
 ### Global Flags
 
@@ -436,7 +444,9 @@ curl "http://localhost:9090/api/outputs?dag=claims_pipeline"
 Create a `pit_config.toml` in the project root to set workspace-level defaults:
 
 ```toml
-secrets_dir = "secrets/secrets.toml"
+secrets_dir = "secrets/secrets.toml.age"
+secrets_recipients = "age-recipients.txt"
+age_identity = "~/.config/pit/age-key.txt"
 runs_dir = "runs"
 repo_cache_dir = "repo_cache"
 dbt_driver = "ODBC Driver 17 for SQL Server"
@@ -445,7 +455,9 @@ keep_artifacts = ["logs", "project", "data"]
 
 | Field | Default | Description |
 |-------|---------|-------------|
-| `secrets_dir` | (none) | Path to secrets TOML file |
+| `secrets_dir` | (none) | Path to secrets file (`.toml` or `.toml.age`) |
+| `secrets_recipients` | (none) | Path to `age-recipients.txt` for encryption |
+| `age_identity` | `~/.config/pit/age-key.txt` | Path to age identity file |
 | `runs_dir` | `"runs"` | Directory for run snapshots |
 | `repo_cache_dir` | `"repo_cache"` | Directory for persistent git repository clones |
 | `dbt_driver` | `"ODBC Driver 17 for SQL Server"` | ODBC driver for dbt profiles |
@@ -492,11 +504,53 @@ go vet ./...
 
 ## Secrets
 
-Secrets are stored in a TOML file outside the repo (e.g. `/etc/pit/secrets.toml` in production). Pass the path via `--secrets`:
+Secrets are encrypted at rest using [age](https://age-encryption.org/) encryption. The TOML format is unchanged, but stored in an `.age` encrypted file instead of plaintext.
+
+### Setup
 
 ```bash
-pit run my_pipeline --secrets ./secrets.toml
+# 1. Generate an age identity (stores key in ~/.config/pit/age-key.txt)
+pit secrets keygen
+
+# 2. Create age-recipients.txt with the public key printed above
+echo "age1..." > age-recipients.txt
+
+# 3. If migrating from plaintext secrets.toml, encrypt it
+pit secrets encrypt
+
+# 4. Configure pit_config.toml
 ```
+
+```toml
+secrets_dir = "secrets/secrets.toml.age"
+secrets_recipients = "age-recipients.txt"
+age_identity = "~/.config/pit/age-key.txt"
+```
+
+### Secrets CLI Commands
+
+| Command | Description |
+|---------|-------------|
+| `pit secrets keygen` | Generate age identity, print public key |
+| `pit secrets encrypt` | One-time migration from plaintext secrets.toml |
+| `pit secrets edit` | Decrypt, open in `$EDITOR`, re-encrypt |
+| `pit secrets set <project> <key> <value>` | Set a plain secret |
+| `pit secrets set <project> <key> --field k=v` | Set a structured secret field |
+| `pit secrets get <project> <key>` | Print a secret value |
+| `pit secrets list [project]` | List secret keys (not values) |
+| `pit secrets remove <project> <key>` | Remove a secret |
+| `pit secrets add-recipient <public-key>` | Add recipient, re-encrypt |
+
+### Identity Resolution
+
+Pit resolves the age identity in this order:
+
+1. `PIT_AGE_KEY` environment variable (raw key material)
+2. `PIT_AGE_KEY_FILE` environment variable (path to key file)
+3. `age_identity` field in `pit_config.toml`
+4. `~/.config/pit/age-key.txt` (default)
+
+### Secrets Format
 
 Secrets are organised by project scope with a `[global]` fallback. A secret can be either a **plain value** or a **structured secret** with multiple fields:
 
@@ -526,6 +580,10 @@ password = "secret123"
 Resolution order: project-scoped section first, then `[global]`.
 
 Plain secrets are resolved with `Resolve(project, key)`. Structured secrets support field-level access with `ResolveField(project, secret, field)`. When `Resolve` is called on a structured secret, it returns a JSON object of all fields.
+
+### Audit
+
+All secret operations are tracked in `pit_metadata.db`. Events recorded include created, updated, deleted, and accessed — with DAG, task, and run context where applicable.
 
 ## SDK Socket
 
@@ -738,4 +796,4 @@ The following features are planned but not yet implemented. See `pit-architectur
 - **Status dashboard** — Read-only web UI for monitoring DAGs, viewing logs, browsing outputs.
 - **SDK socket authentication** — Per-connection auth, secret access audit logging, per-project ACLs.
 - **Log archival** — Archive completed run logs for historical queries.
-- **Encrypted secrets** — At-rest encryption, key rotation, connection pooling across tasks.
+- ~~**Encrypted secrets**~~ — Implemented. See [Secrets](#secrets) section.

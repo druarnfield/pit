@@ -50,17 +50,24 @@ func seedTestRuns(t *testing.T, store *meta.SQLiteStore) {
 	now := time.Date(2026, 3, 7, 14, 30, 0, 0, time.UTC)
 	ended := now.Add(2 * time.Minute)
 
-	store.RecordRunStart("20260307_143000.000_dag_a", "dag_a", "success", "runs/20260307_143000.000_dag_a", "cron", now)
-	store.RecordRunEnd("20260307_143000.000_dag_a", "success", ended, "")
+	check := func(err error) {
+		t.Helper()
+		if err != nil {
+			t.Fatalf("seed: %v", err)
+		}
+	}
 
-	store.RecordTaskStart("20260307_143000.000_dag_a", "extract", "success", "runs/20260307_143000.000_dag_a/logs/extract.log", now)
+	check(store.RecordRunStart("20260307_143000.000_dag_a", "dag_a", "success", "runs/20260307_143000.000_dag_a", "cron", now))
+	check(store.RecordRunEnd("20260307_143000.000_dag_a", "success", ended, ""))
+
+	check(store.RecordTaskStart("20260307_143000.000_dag_a", "extract", "success", "runs/20260307_143000.000_dag_a/logs/extract.log", now))
 	taskEnded := now.Add(45 * time.Second)
-	store.RecordTaskEnd("20260307_143000.000_dag_a", "extract", "success", taskEnded, 1, "")
+	check(store.RecordTaskEnd("20260307_143000.000_dag_a", "extract", "success", taskEnded, 1, ""))
 
-	store.RecordTaskStart("20260307_143000.000_dag_a", "load", "success", "runs/20260307_143000.000_dag_a/logs/load.log", taskEnded)
-	store.RecordTaskEnd("20260307_143000.000_dag_a", "load", "success", ended, 1, "")
+	check(store.RecordTaskStart("20260307_143000.000_dag_a", "load", "success", "runs/20260307_143000.000_dag_a/logs/load.log", taskEnded))
+	check(store.RecordTaskEnd("20260307_143000.000_dag_a", "load", "success", ended, 1, ""))
 
-	store.RecordOutput("20260307_143000.000_dag_a", "dag_a", "claims_staging", "table", "warehouse.staging.claims")
+	check(store.RecordOutput("20260307_143000.000_dag_a", "dag_a", "claims_staging", "table", "warehouse.staging.claims"))
 }
 
 func TestHealth(t *testing.T) {

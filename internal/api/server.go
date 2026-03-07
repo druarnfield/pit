@@ -1,8 +1,10 @@
 package api
 
 import (
+	"crypto/sha256"
 	"crypto/subtle"
 	"encoding/json"
+	"log"
 	"net/http"
 	"strings"
 
@@ -39,7 +41,9 @@ func (h *handler) authMiddleware(next http.Handler) http.Handler {
 			if strings.HasPrefix(authHeader, "Bearer ") {
 				provided = authHeader[len("Bearer "):]
 			}
-			if subtle.ConstantTimeCompare([]byte(provided), []byte(h.token)) != 1 {
+			expected := sha256.Sum256([]byte(h.token))
+			got := sha256.Sum256([]byte(provided))
+			if subtle.ConstantTimeCompare(expected[:], got[:]) != 1 {
 				writeJSON(w, http.StatusUnauthorized, map[string]string{"error": "unauthorized"})
 				return
 			}
@@ -56,7 +60,9 @@ func (h *handler) handleHealth(w http.ResponseWriter, r *http.Request) {
 func writeJSON(w http.ResponseWriter, status int, v any) {
 	w.Header().Set("Content-Type", "application/json")
 	w.WriteHeader(status)
-	json.NewEncoder(w).Encode(v)
+	if err := json.NewEncoder(w).Encode(v); err != nil {
+		log.Printf("api: json encode error: %v", err)
+	}
 }
 
 func writeError(w http.ResponseWriter, status int, msg string) {

@@ -1,6 +1,7 @@
 package api
 
 import (
+	"log"
 	"net/http"
 	"sort"
 	"strconv"
@@ -71,7 +72,8 @@ func parseLimit(r *http.Request, defaultVal, maxVal int) int {
 func (h *handler) handleListDAGs(w http.ResponseWriter, r *http.Request) {
 	runs, err := h.store.LatestRunPerDAG()
 	if err != nil {
-		writeError(w, http.StatusInternalServerError, err.Error())
+		log.Printf("api: %v", err)
+		writeError(w, http.StatusInternalServerError, "internal server error")
 		return
 	}
 
@@ -130,7 +132,8 @@ func (h *handler) handleDAGDetail(w http.ResponseWriter, r *http.Request) {
 
 	runs, err := h.store.LatestRuns(name, 10)
 	if err != nil {
-		writeError(w, http.StatusInternalServerError, err.Error())
+		log.Printf("api: %v", err)
+		writeError(w, http.StatusInternalServerError, "internal server error")
 		return
 	}
 
@@ -182,7 +185,8 @@ func (h *handler) handleListRuns(w http.ResponseWriter, r *http.Request) {
 
 	runs, err := h.store.LatestRuns(dagName, limit)
 	if err != nil {
-		writeError(w, http.StatusInternalServerError, err.Error())
+		log.Printf("api: %v", err)
+		writeError(w, http.StatusInternalServerError, "internal server error")
 		return
 	}
 
@@ -208,7 +212,8 @@ func (h *handler) handleRunDetail(w http.ResponseWriter, r *http.Request) {
 
 	run, tasks, err := h.store.RunDetail(id)
 	if err != nil {
-		writeError(w, http.StatusInternalServerError, err.Error())
+		log.Printf("api: %v", err)
+		writeError(w, http.StatusInternalServerError, "internal server error")
 		return
 	}
 	if run == nil {
@@ -246,7 +251,8 @@ func (h *handler) handleListOutputs(w http.ResponseWriter, r *http.Request) {
 
 	runs, err := h.store.LatestRunPerDAG()
 	if err != nil {
-		writeError(w, http.StatusInternalServerError, err.Error())
+		log.Printf("api: %v", err)
+		writeError(w, http.StatusInternalServerError, "internal server error")
 		return
 	}
 
@@ -269,7 +275,8 @@ func (h *handler) handleListOutputs(w http.ResponseWriter, r *http.Request) {
 
 		outs, err := h.store.OutputsByRun(rr.ID)
 		if err != nil {
-			writeError(w, http.StatusInternalServerError, err.Error())
+			log.Printf("api: %v", err)
+		writeError(w, http.StatusInternalServerError, "internal server error")
 			return
 		}
 		for _, o := range outs {

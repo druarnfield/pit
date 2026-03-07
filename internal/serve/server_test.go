@@ -1,6 +1,8 @@
 package serve
 
 import (
+	"net/http"
+	"net/http/httptest"
 	"os"
 	"path/filepath"
 	"strings"
@@ -185,6 +187,39 @@ func TestOverlapSkip(t *testing.T) {
 	s.mu.Unlock()
 	if !isActive {
 		t.Error("expected test DAG to be active")
+	}
+}
+
+func TestWebhookStreamDefault(t *testing.T) {
+	dir := t.TempDir()
+	mkProject(t, dir, "hook_dag", `[dag]
+name = "hook_dag"
+
+[dag.webhook]
+token_secret = "hook_token"
+
+[[tasks]]
+name = "hello"
+script = "tasks/hello.sh"
+`)
+
+	secretsFile := filepath.Join(dir, "secrets.toml")
+	os.WriteFile(secretsFile, []byte(`[global]
+hook_token = "my-secret"
+`), 0o644)
+
+	s, err := NewServer(dir, secretsFile, false, Options{})
+	if err != nil {
+		t.Fatalf("NewServer: %v", err)
+	}
+
+	req := httptest.NewRequest(http.MethodPost, "/webhook/hook_dag", nil)
+	req.Header.Set("Authorization", "Bearer my-secret")
+	w := httptest.NewRecorder()
+	s.webhookHandler(w, req)
+
+	if w.Code != http.StatusAccepted {
+		t.Errorf("status = %d, want %d", w.Code, http.StatusAccepted)
 	}
 }
 

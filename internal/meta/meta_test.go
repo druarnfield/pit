@@ -433,3 +433,79 @@ func TestLatestRunPerDAG(t *testing.T) {
 		t.Errorf("LatestRunPerDAG() returned %d runs, want 2", len(runs))
 	}
 }
+
+// Task 17 tests — MetadataRecorder adapter methods
+
+func TestRecordRunStartEnd(t *testing.T) {
+	s := newTestStore(t)
+	now := time.Now().UTC()
+
+	err := s.RecordRunStart("run1", "my_dag", "running", "runs/run1", "cron", now)
+	if err != nil {
+		t.Fatalf("RecordRunStart: %v", err)
+	}
+
+	ended := now.Add(time.Minute)
+	err = s.RecordRunEnd("run1", "success", ended, "")
+	if err != nil {
+		t.Fatalf("RecordRunEnd: %v", err)
+	}
+
+	run, _, err := s.RunDetail("run1")
+	if err != nil {
+		t.Fatalf("RunDetail: %v", err)
+	}
+	if run.Status != "success" {
+		t.Errorf("status = %q, want %q", run.Status, "success")
+	}
+	if run.Trigger != "cron" {
+		t.Errorf("trigger = %q, want %q", run.Trigger, "cron")
+	}
+}
+
+func TestRecordTaskStartEnd(t *testing.T) {
+	s := newTestStore(t)
+	now := time.Now().UTC()
+	s.RecordRunStart("run1", "my_dag", "running", "runs/run1", "manual", now)
+
+	err := s.RecordTaskStart("run1", "extract", "running", "runs/run1/logs/extract.log", now)
+	if err != nil {
+		t.Fatalf("RecordTaskStart: %v", err)
+	}
+
+	ended := now.Add(30 * time.Second)
+	err = s.RecordTaskEnd("run1", "extract", "success", ended, 1, "")
+	if err != nil {
+		t.Fatalf("RecordTaskEnd: %v", err)
+	}
+
+	_, tasks, err := s.RunDetail("run1")
+	if err != nil {
+		t.Fatalf("RunDetail: %v", err)
+	}
+	if len(tasks) != 1 {
+		t.Fatalf("expected 1 task, got %d", len(tasks))
+	}
+	if tasks[0].Status != "success" {
+		t.Errorf("task status = %q, want %q", tasks[0].Status, "success")
+	}
+}
+
+func TestRecordOutput(t *testing.T) {
+	s := newTestStore(t)
+	now := time.Now().UTC()
+	s.RecordRunStart("run1", "my_dag", "running", "runs/run1", "manual", now)
+
+	err := s.RecordOutput("run1", "my_dag", "report", "file", "/data/report.csv")
+	if err != nil {
+		t.Fatalf("RecordOutput: %v", err)
+	}
+
+	outputs, err := s.OutputsByRun("run1")
+	if err != nil {
+		t.Fatalf("OutputsByRun: %v", err)
+	}
+	if len(outputs) != 1 {
+		t.Fatalf("expected 1 output, got %d", len(outputs))
+	}
+}

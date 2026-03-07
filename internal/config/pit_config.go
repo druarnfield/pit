@@ -27,6 +27,7 @@ type PitConfig struct {
 	RunsDir       string   `toml:"runs_dir"`
 	RepoCacheDir  string   `toml:"repo_cache_dir"`
 	MetadataDB    string   `toml:"metadata_db"`
+	APIToken      string   `toml:"api_token"`
 	DBTDriver     string   `toml:"dbt_driver"`
 	KeepArtifacts []string `toml:"keep_artifacts"`
 }

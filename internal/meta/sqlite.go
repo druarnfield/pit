@@ -369,6 +369,12 @@ func (s *SQLiteStore) RecordOutput(runID, dagName, name, outputType, location st
 	return err
 }
 
+// UpdateRunDir updates the run_dir for a given run ID.
+func (s *SQLiteStore) UpdateRunDir(runID, runDir string) error {
+	_, err := s.db.Exec("UPDATE runs SET run_dir = ? WHERE id = ?", runDir, runID)
+	return err
+}
+
 // Compile-time interface satisfaction check.
 var _ Store = (*SQLiteStore)(nil)
 

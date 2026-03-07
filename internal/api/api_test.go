@@ -4,10 +4,14 @@ import (
 	"encoding/json"
 	"net/http"
 	"net/http/httptest"
+	"os"
+	"path/filepath"
+	"strings"
 	"testing"
 	"time"
 
 	"github.com/druarnfield/pit/internal/config"
+	"github.com/druarnfield/pit/internal/loghub"
 	"github.com/druarnfield/pit/internal/meta"
 )
 
@@ -389,5 +393,206 @@ func TestListOutputs(t *testing.T) {
 	}
 	if len(body2.Outputs) != 0 {
 		t.Errorf("dag_b outputs: got %d, want 0", len(body2.Outputs))
+	}
+}
+
+// setupRunDir creates a temp dir with log files and updates the run's run_dir.
+func setupRunDir(t *testing.T, store *meta.SQLiteStore, runID string, logs map[string]string) string {
+	t.Helper()
+	dir := t.TempDir()
+	logDir := filepath.Join(dir, "logs")
+	if err := os.MkdirAll(logDir, 0o755); err != nil {
+		t.Fatalf("mkdir logs: %v", err)
+	}
+	for name, content := range logs {
+		if err := os.WriteFile(filepath.Join(logDir, name), []byte(content), 0o644); err != nil {
+			t.Fatalf("write %s: %v", name, err)
+		}
+	}
+	if err := store.UpdateRunDir(runID, dir); err != nil {
+		t.Fatalf("UpdateRunDir: %v", err)
+	}
+	return dir
+}
+
+func TestRunLogsFinished(t *testing.T) {
+	store := newTestStore(t)
+	seedTestRuns(t, store)
+
+	setupRunDir(t, store, "20260307_143000.000_dag_a", map[string]string{
+		"extract.log": "fetching data\ndone\n",
+		"load.log":    "loading records\n",
+	})
+
+	h := NewHandler(newTestConfigs(), store, "", nil, "")
+	req := httptest.NewRequest(http.MethodGet, "/api/runs/20260307_143000.000_dag_a/logs", nil)
+	w := httptest.NewRecorder()
+	h.ServeHTTP(w, req)
+
+	if w.Code != http.StatusOK {
+		t.Fatalf("status = %d, want %d", w.Code, http.StatusOK)
+	}
+
+	ct := w.Header().Get("Content-Type")
+	if ct != "text/event-stream" {
+		t.Errorf("Content-Type = %q, want %q", ct, "text/event-stream")
+	}
+
+	body := w.Body.String()
+	if !strings.Contains(body, "event: log") {
+		t.Errorf("body missing 'event: log'")
+	}
+	if !strings.Contains(body, "fetching data") {
+		t.Errorf("body missing 'fetching data'")
+	}
+	if !strings.Contains(body, "event: complete") {
+		t.Errorf("body missing 'event: complete'")
+	}
+	if !strings.Contains(body, `"status":"success"`) {
+		t.Errorf("body missing status:success in complete event")
+	}
+}
+
+func TestRunLogsWithLinesParam(t *testing.T) {
+	store := newTestStore(t)
+	seedTestRuns(t, store)
+
+	setupRunDir(t, store, "20260307_143000.000_dag_a", map[string]string{
+		"extract.log": "line1\nline2\nline3\n",
+	})
+
+	h := NewHandler(newTestConfigs(), store, "", nil, "")
+	req := httptest.NewRequest(http.MethodGet, "/api/runs/20260307_143000.000_dag_a/logs?lines=2", nil)
+	w := httptest.NewRecorder()
+	h.ServeHTTP(w, req)
+
+	body := w.Body.String()
+	if strings.Contains(body, "line1") {
+		t.Errorf("body should not contain 'line1' with lines=2")
+	}
+	if !strings.Contains(body, "line2") {
+		t.Errorf("body missing 'line2'")
+	}
+	if !strings.Contains(body, "line3") {
+		t.Errorf("body missing 'line3'")
+	}
+}
+
+func TestRunLogsNotFound(t *testing.T) {
+	h := NewHandler(newTestConfigs(), newTestStore(t), "", nil, "")
+	req := httptest.NewRequest(http.MethodGet, "/api/runs/nonexistent/logs", nil)
+	w := httptest.NewRecorder()
+	h.ServeHTTP(w, req)
+
+	if w.Code != http.StatusNotFound {
+		t.Errorf("status = %d, want %d", w.Code, http.StatusNotFound)
+	}
+}
+
+func TestDAGLogsNotFound(t *testing.T) {
+	h := NewHandler(newTestConfigs(), newTestStore(t), "", nil, "")
+	req := httptest.NewRequest(http.MethodGet, "/api/dags/nonexistent/logs", nil)
+	w := httptest.NewRecorder()
+	h.ServeHTTP(w, req)
+
+	if w.Code != http.StatusNotFound {
+		t.Errorf("status = %d, want %d", w.Code, http.StatusNotFound)
+	}
+}
+
+func TestDAGLogsResolvesLatest(t *testing.T) {
+	store := newTestStore(t)
+	seedTestRuns(t, store)
+
+	setupRunDir(t, store, "20260307_143000.000_dag_a", map[string]string{
+		"extract.log": "dag_a log\n",
+	})
+
+	h := NewHandler(newTestConfigs(), store, "", nil, "")
+	req := httptest.NewRequest(http.MethodGet, "/api/dags/dag_a/logs", nil)
+	w := httptest.NewRecorder()
+	h.ServeHTTP(w, req)
+
+	body := w.Body.String()
+	if !strings.Contains(body, "dag_a log") {
+		t.Errorf("body missing 'dag_a log'")
+	}
+	if !strings.Contains(body, "event: complete") {
+		t.Errorf("body missing 'event: complete'")
+	}
+}
+
+func TestSSEAuthRequired(t *testing.T) {
+	h := NewHandler(newTestConfigs(), newTestStore(t), "secret-token", nil, "")
+	req := httptest.NewRequest(http.MethodGet, "/api/runs/any/logs", nil)
+	w := httptest.NewRecorder()
+	h.ServeHTTP(w, req)
+
+	if w.Code != http.StatusUnauthorized {
+		t.Errorf("status = %d, want %d", w.Code, http.StatusUnauthorized)
+	}
+}
+
+func TestDAGLogsNoRuns(t *testing.T) {
+	// No seeded runs — dag_a exists in config but has no runs
+	h := NewHandler(newTestConfigs(), newTestStore(t), "", nil, "")
+	req := httptest.NewRequest(http.MethodGet, "/api/dags/dag_a/logs", nil)
+	w := httptest.NewRecorder()
+	h.ServeHTTP(w, req)
+
+	if w.Code != http.StatusNotFound {
+		t.Errorf("status = %d, want %d", w.Code, http.StatusNotFound)
+	}
+}
+
+func TestRunLogsLive(t *testing.T) {
+	store := newTestStore(t)
+	seedTestRuns(t, store)
+
+	hub := loghub.New()
+	defer hub.Close()
+
+	runID := "20260307_143000.000_dag_a"
+	hub.Activate(runID)
+
+	setupRunDir(t, store, runID, map[string]string{})
+
+	h := NewHandler(newTestConfigs(), store, "", hub, "")
+	req := httptest.NewRequest(http.MethodGet, "/api/runs/"+runID+"/logs", nil)
+	w := httptest.NewRecorder()
+
+	done := make(chan struct{})
+	go func() {
+		h.ServeHTTP(w, req)
+		close(done)
+	}()
+
+	// Give the handler time to subscribe
+	time.Sleep(50 * time.Millisecond)
+
+	hub.Publish(runID, loghub.Entry{
+		Timestamp: time.Now(),
+		RunID:     runID,
+		DAGName:   "dag_a",
+		TaskName:  "extract",
+		Level:     "info",
+		Message:   "live log line",
+	})
+
+	time.Sleep(50 * time.Millisecond)
+	hub.Complete(runID, "success")
+
+	select {
+	case <-done:
+	case <-time.After(5 * time.Second):
+		t.Fatal("handler did not finish within 5 seconds")
+	}
+
+	body := w.Body.String()
+	if !strings.Contains(body, "live log line") {
+		t.Errorf("body missing 'live log line'")
+	}
+	if !strings.Contains(body, "event: complete") {
+		t.Errorf("body missing 'event: complete'")
 	}
 }

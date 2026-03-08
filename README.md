@@ -638,13 +638,64 @@ name = "warehouse_transforms"
 connection = "warehouse_db"
 ```
 
-The connection name is resolved from the secrets file. Supported drivers:
+The connection name is resolved from the secrets file. Without `--secrets`, SQL tasks fall back to stub mode (log file contents without executing).
 
-| Connection string prefix | Driver |
-|-------------------------|--------|
-| `sqlserver://`, `mssql://` | Microsoft SQL Server |
+### Supported Databases
 
-Without `--secrets`, SQL tasks fall back to stub mode (log file contents without executing).
+| Database | Connection Prefix | Bulk Mechanism | Go Driver |
+|---|---|---|---|
+| MSSQL | `sqlserver://`, `mssql://` | `mssql.CopyIn` | go-mssqldb |
+| Postgres | `postgres://`, `postgresql://` | COPY protocol (pgx) | pgx/v5 |
+| ClickHouse | `clickhouse://` | Batch INSERT | clickhouse-go/v2 |
+| Oracle | `oracle://` | Prepared INSERT | go-ora/v2 |
+
+### SQL Task Types
+
+By default, a SQL task executes its script against the database. Two additional task types enable data movement between databases and Parquet files:
+
+| Type | Description |
+|------|-------------|
+| (default) | Execute SQL script against the database |
+| `type = "save"` | Execute a SQL query and save results to a Parquet file |
+| `type = "load"` | Load a Parquet file from the data directory into a database table |
+
+#### Task Config Fields
+
+| Field | Applies to | Description |
+|-------|-----------|-------------|
+| `type` | load, save | `"load"` or `"save"` (omit for default exec) |
+| `source` | load | Parquet file path relative to data directory |
+| `output` | save | Parquet file path relative to data directory |
+| `table` | load | Target table, supports `schema.table` format |
+| `mode` | load | `"append"` (default), `"truncate_and_load"`, or `"create_or_replace"` |
+| `connection` | all | Overrides `[dag.sql].connection` for this task |
+
+#### Save + Load Example
+
+```toml
+[dag]
+name = "cross_db_pipeline"
+
+[dag.sql]
+connection = "warehouse_db"
+
+[[tasks]]
+name = "extract_customers"
+type = "save"
+script = "tasks/extract.sql"
+output = "customers.parquet"
+connection = "oracle_source"
+
+[[tasks]]
+name = "load_customers"
+type = "load"
+source = "customers.parquet"
+table = "staging.customers"
+mode = "truncate_and_load"
+depends_on = ["extract_customers"]
+```
+
+This pattern extracts data from one database (Oracle) into a Parquet file, then bulk-loads it into another (the default warehouse connection). The Parquet file lives in the run's `data/` directory.
 
 ## dbt Projects
 

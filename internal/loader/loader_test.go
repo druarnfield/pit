@@ -356,8 +356,8 @@ func TestLoadParams_Defaults(t *testing.T) {
 	if err == nil {
 		t.Fatal("Load() expected error for unsupported driver, got nil")
 	}
-	// Error should mention driver detection, not schema/mode
-	expected := "detecting driver"
+	// Error should mention driver lookup, not schema/mode
+	expected := "getting driver"
 	if got := fmt.Sprintf("%v", err); !containsStr(got, expected) {
 		t.Errorf("error = %q, want it to contain %q", got, expected)
 	}

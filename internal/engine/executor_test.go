@@ -3,6 +3,7 @@ package engine
 import (
 	"testing"
 
+	"github.com/druarnfield/pit/internal/config"
 	"github.com/druarnfield/pit/internal/secrets"
 )
 
@@ -29,5 +30,40 @@ func TestRun_SecretsResolverNilInterface(t *testing.T) {
 	}
 	if run.SecretsResolver != nil {
 		t.Error("SecretsResolver should be nil interface when store is nil, got non-nil")
+	}
+}
+
+func TestResolveTaskConnection(t *testing.T) {
+	cfg := &config.ProjectConfig{
+		DAG: config.DAGConfig{SQL: config.SQLConfig{Connection: "default_conn"}},
+	}
+	// Task override wins
+	tc := &config.TaskConfig{Connection: "task_conn"}
+	if got := resolveTaskConnection(tc, cfg); got != "task_conn" {
+		t.Errorf("got %q, want %q", got, "task_conn")
+	}
+	// Falls back to DAG default
+	tc2 := &config.TaskConfig{}
+	if got := resolveTaskConnection(tc2, cfg); got != "default_conn" {
+		t.Errorf("got %q, want %q", got, "default_conn")
+	}
+}
+
+func TestParseSchemaTable(t *testing.T) {
+	tests := []struct {
+		input      string
+		wantSchema string
+		wantTable  string
+	}{
+		{"staging.customers", "staging", "customers"},
+		{"customers", "", "customers"},
+		{"public.my_table", "public", "my_table"},
+	}
+	for _, tt := range tests {
+		s, tbl := parseSchemaTable(tt.input)
+		if s != tt.wantSchema || tbl != tt.wantTable {
+			t.Errorf("parseSchemaTable(%q) = (%q, %q), want (%q, %q)",
+				tt.input, s, tbl, tt.wantSchema, tt.wantTable)
+		}
 	}
 }

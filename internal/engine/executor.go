@@ -434,6 +434,65 @@ func executeTask(ctx context.Context, ti *TaskInstance, run *Run, cfg *config.Pr
 		}()
 	}
 
+	// Find the task config for load/save handling
+	var tc *config.TaskConfig
+	for i := range cfg.Tasks {
+		if cfg.Tasks[i].Name == ti.Name {
+			tc = &cfg.Tasks[i]
+			break
+		}
+	}
+
+	// Handle load/save SQL task types
+	if tc != nil && (tc.Type == "load" || tc.Type == "save") {
+		// Set up log file for load/save tasks
+		logPath := filepath.Join(run.LogDir, ti.Name+".log")
+		logFile, err := os.Create(logPath)
+		if err != nil {
+			run.mu.Lock()
+			ti.Status = StatusFailed
+			ti.Error = fmt.Errorf("creating log file: %w", err)
+			ti.EndedAt = time.Now()
+			run.mu.Unlock()
+			return
+		}
+		defer logFile.Close()
+
+		writers := []io.Writer{logFile}
+		if opts.Verbose {
+			isConcurrent := len(concurrent) > 0 && concurrent[0]
+			if isConcurrent {
+				writers = append(writers, &prefixWriter{
+					prefix: []byte("[" + ti.Name + "] "),
+					dest:   os.Stdout,
+				})
+			} else {
+				writers = append(writers, os.Stdout)
+			}
+		}
+		if opts.LogHub != nil {
+			hubWriter := loghub.NewWriter(opts.LogHub, run.ID, run.DAGName, ti.Name, 1)
+			writers = append(writers, hubWriter)
+		}
+		var logWriter io.Writer = logFile
+		if len(writers) > 1 {
+			logWriter = io.MultiWriter(writers...)
+		}
+
+		err = executeSQLTask(ctx, ti, run, cfg, tc, opts, logWriter)
+		run.mu.Lock()
+		if err != nil {
+			ti.Status = StatusFailed
+			ti.Error = err
+		} else {
+			ti.Status = StatusSuccess
+		}
+		ti.Attempt = 1
+		ti.EndedAt = time.Now()
+		run.mu.Unlock()
+		return
+	}
+
 	scriptPath := filepath.Join(run.SnapshotDir, ti.Script)
 
 	// Resolve the runner — dbt is special-cased since it needs config + profiles
@@ -683,10 +742,6 @@ func makeLoadDataHandler(store *secrets.Store, dagName string, dataDir string) s
 			return "", fmt.Errorf("secrets store not configured (use --secrets flag)")
 		}
 
-		schema := params["schema"]
-		if schema == "" {
-			schema = "dbo"
-		}
 		mode := params["mode"]
 		if mode == "" {
 			mode = "append"
@@ -711,6 +766,17 @@ func makeLoadDataHandler(store *secrets.Store, dagName string, dataDir string) s
 			return "", fmt.Errorf("resolving connection %q: %w", connKey, err)
 		}
 
+		schema := params["schema"]
+		if schema == "" {
+			driverName, _ := runner.DetectDriver(connStr)
+			if drv, drvErr := loader.GetDriver(driverName); drvErr == nil {
+				schema = drv.DefaultSchema()
+			}
+			if schema == "" {
+				schema = "dbo"
+			}
+		}
+
 		rows, err := loader.Load(ctx, loader.LoadParams{
 			FilePath: absFile,
 			Table:    table,
@@ -724,6 +790,86 @@ func makeLoadDataHandler(store *secrets.Store, dagName string, dataDir string) s
 
 		return fmt.Sprintf("%d rows loaded", rows), nil
 	}
+}
+
+// resolveTaskConnection returns the connection key for a task, falling back to DAG default.
+func resolveTaskConnection(tc *config.TaskConfig, cfg *config.ProjectConfig) string {
+	if tc.Connection != "" {
+		return tc.Connection
+	}
+	return cfg.DAG.SQL.Connection
+}
+
+// parseSchemaTable splits "schema.table" into schema and table parts.
+// If no dot, returns empty schema and the full string as table.
+func parseSchemaTable(fqTable string) (string, string) {
+	parts := strings.SplitN(fqTable, ".", 2)
+	if len(parts) == 2 {
+		return parts[0], parts[1]
+	}
+	return "", parts[0]
+}
+
+// executeSQLTask handles load and save task types.
+func executeSQLTask(ctx context.Context, ti *TaskInstance, run *Run, cfg *config.ProjectConfig, tc *config.TaskConfig, opts ExecuteOpts, logWriter io.Writer) error {
+	connKey := resolveTaskConnection(tc, cfg)
+	if connKey == "" {
+		return fmt.Errorf("no connection configured (set connection on task or [dag.sql])")
+	}
+	if run.SecretsResolver == nil {
+		return fmt.Errorf("secrets store not configured (use --secrets flag)")
+	}
+
+	connStr, err := run.SecretsResolver.Resolve(run.DAGName, connKey)
+	if err != nil {
+		return fmt.Errorf("resolving connection %q: %w", connKey, err)
+	}
+
+	start := time.Now()
+
+	switch tc.Type {
+	case "load":
+		sourcePath := filepath.Join(run.DataDir, tc.Source)
+		schema, table := parseSchemaTable(tc.Table)
+		mode := tc.Mode
+		if mode == "" {
+			mode = "append"
+		}
+		rows, err := loader.Load(ctx, loader.LoadParams{
+			FilePath: sourcePath,
+			Table:    table,
+			Schema:   schema,
+			Mode:     loader.LoadMode(mode),
+			ConnStr:  connStr,
+		})
+		if err != nil {
+			return fmt.Errorf("loading data: %w", err)
+		}
+		elapsed := time.Since(start)
+		fmt.Fprintf(logWriter, "[load] %s -> %s: %d rows loaded in %s\n",
+			tc.Source, tc.Table, rows, elapsed.Round(time.Millisecond))
+
+	case "save":
+		scriptPath := filepath.Join(run.SnapshotDir, tc.Script)
+		query, err := os.ReadFile(scriptPath)
+		if err != nil {
+			return fmt.Errorf("reading SQL script %s: %w", tc.Script, err)
+		}
+		outputPath := filepath.Join(run.DataDir, tc.Output)
+		rows, err := loader.Save(ctx, loader.SaveParams{
+			Query:    string(query),
+			FilePath: outputPath,
+			ConnStr:  connStr,
+		})
+		if err != nil {
+			return fmt.Errorf("saving data: %w", err)
+		}
+		elapsed := time.Since(start)
+		fmt.Fprintf(logWriter, "[save] %s -> %s: %d rows saved in %s\n",
+			tc.Script, tc.Output, rows, elapsed.Round(time.Millisecond))
+	}
+
+	return nil
 }
 
 // hashFile returns the SHA-256 hex digest of the file at path, or "" on error.

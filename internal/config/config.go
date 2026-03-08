@@ -103,6 +103,12 @@ type TaskConfig struct {
 	Timeout    Duration `toml:"timeout"`
 	Retries    int      `toml:"retries"`
 	RetryDelay Duration `toml:"retry_delay"`
+	Type       string   `toml:"type"`       // "load", "save", or "" (default exec)
+	Source     string   `toml:"source"`     // Parquet file for load
+	Output     string   `toml:"output"`     // Parquet file for save
+	Table      string   `toml:"table"`      // target table for load
+	Mode       string   `toml:"mode"`       // "append", "truncate_and_load", "create_or_replace"
+	Connection string   `toml:"connection"` // overrides [dag.sql].connection
 }
 
 // Output defines a DAG output artifact.

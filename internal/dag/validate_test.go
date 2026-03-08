@@ -2,6 +2,7 @@ package dag
 
 import (
 	"os"
+	"path/filepath"
 	"strings"
 	"testing"
 
@@ -591,6 +592,208 @@ func TestValidate_GitURL_DBTEmptyProjectDir(t *testing.T) {
 		if strings.Contains(e.Error(), "project_dir") {
 			t.Errorf("Validate() unexpected project_dir error for git-backed DAG: %s", e)
 		}
+	}
+}
+
+func TestValidate_LoadTask_Valid(t *testing.T) {
+	cfg := &config.ProjectConfig{
+		DAG: config.DAGConfig{Name: "test"},
+		Tasks: []config.TaskConfig{
+			{Name: "load_data", Type: "load", Source: "data/output.parquet", Table: "staging.raw_data", Mode: "append"},
+		},
+	}
+	errs := Validate(cfg, t.TempDir())
+	if len(errs) != 0 {
+		t.Errorf("Validate() returned %d errors, want 0:", len(errs))
+		for _, e := range errs {
+			t.Errorf("  %s", e)
+		}
+	}
+}
+
+func TestValidate_LoadTask_MissingSource(t *testing.T) {
+	cfg := &config.ProjectConfig{
+		DAG: config.DAGConfig{Name: "test"},
+		Tasks: []config.TaskConfig{
+			{Name: "load_data", Type: "load", Table: "staging.raw_data"},
+		},
+	}
+	errs := Validate(cfg, t.TempDir())
+	found := false
+	for _, e := range errs {
+		if strings.Contains(e.Error(), "load task requires source") {
+			found = true
+			break
+		}
+	}
+	if !found {
+		t.Errorf("Validate() expected 'load task requires source' error, got: %v", errs)
+	}
+}
+
+func TestValidate_LoadTask_MissingTable(t *testing.T) {
+	cfg := &config.ProjectConfig{
+		DAG: config.DAGConfig{Name: "test"},
+		Tasks: []config.TaskConfig{
+			{Name: "load_data", Type: "load", Source: "data/output.parquet"},
+		},
+	}
+	errs := Validate(cfg, t.TempDir())
+	found := false
+	for _, e := range errs {
+		if strings.Contains(e.Error(), "load task requires table") {
+			found = true
+			break
+		}
+	}
+	if !found {
+		t.Errorf("Validate() expected 'load task requires table' error, got: %v", errs)
+	}
+}
+
+func TestValidate_LoadTask_ScriptNotAllowed(t *testing.T) {
+	cfg := &config.ProjectConfig{
+		DAG: config.DAGConfig{Name: "test"},
+		Tasks: []config.TaskConfig{
+			{Name: "load_data", Type: "load", Source: "data/output.parquet", Table: "staging.raw_data", Script: "tasks/load.sh"},
+		},
+	}
+	errs := Validate(cfg, t.TempDir())
+	found := false
+	for _, e := range errs {
+		if strings.Contains(e.Error(), "load task must not have script") {
+			found = true
+			break
+		}
+	}
+	if !found {
+		t.Errorf("Validate() expected 'load task must not have script' error, got: %v", errs)
+	}
+}
+
+func TestValidate_SaveTask_Valid(t *testing.T) {
+	tmpDir := t.TempDir()
+	scriptPath := filepath.Join(tmpDir, "tasks")
+	os.MkdirAll(scriptPath, 0o755)
+	os.WriteFile(filepath.Join(scriptPath, "extract.sql"), []byte("SELECT 1"), 0o644)
+
+	cfg := &config.ProjectConfig{
+		DAG: config.DAGConfig{Name: "test"},
+		Tasks: []config.TaskConfig{
+			{Name: "save_data", Type: "save", Script: "tasks/extract.sql", Output: "data/output.parquet"},
+		},
+	}
+	errs := Validate(cfg, tmpDir)
+	if len(errs) != 0 {
+		t.Errorf("Validate() returned %d errors, want 0:", len(errs))
+		for _, e := range errs {
+			t.Errorf("  %s", e)
+		}
+	}
+}
+
+func TestValidate_SaveTask_MissingOutput(t *testing.T) {
+	tmpDir := t.TempDir()
+	scriptPath := filepath.Join(tmpDir, "tasks")
+	os.MkdirAll(scriptPath, 0o755)
+	os.WriteFile(filepath.Join(scriptPath, "extract.sql"), []byte("SELECT 1"), 0o644)
+
+	cfg := &config.ProjectConfig{
+		DAG: config.DAGConfig{Name: "test"},
+		Tasks: []config.TaskConfig{
+			{Name: "save_data", Type: "save", Script: "tasks/extract.sql"},
+		},
+	}
+	errs := Validate(cfg, tmpDir)
+	found := false
+	for _, e := range errs {
+		if strings.Contains(e.Error(), "save task requires output") {
+			found = true
+			break
+		}
+	}
+	if !found {
+		t.Errorf("Validate() expected 'save task requires output' error, got: %v", errs)
+	}
+}
+
+func TestValidate_SaveTask_MissingScript(t *testing.T) {
+	cfg := &config.ProjectConfig{
+		DAG: config.DAGConfig{Name: "test"},
+		Tasks: []config.TaskConfig{
+			{Name: "save_data", Type: "save", Output: "data/output.parquet"},
+		},
+	}
+	errs := Validate(cfg, t.TempDir())
+	found := false
+	for _, e := range errs {
+		if strings.Contains(e.Error(), "save task requires script") {
+			found = true
+			break
+		}
+	}
+	if !found {
+		t.Errorf("Validate() expected 'save task requires script' error, got: %v", errs)
+	}
+}
+
+func TestValidate_InvalidTaskType(t *testing.T) {
+	cfg := &config.ProjectConfig{
+		DAG: config.DAGConfig{Name: "test"},
+		Tasks: []config.TaskConfig{
+			{Name: "bad_task", Type: "unknown"},
+		},
+	}
+	errs := Validate(cfg, t.TempDir())
+	found := false
+	for _, e := range errs {
+		if strings.Contains(e.Error(), "invalid task type") {
+			found = true
+			break
+		}
+	}
+	if !found {
+		t.Errorf("Validate() expected 'invalid task type' error, got: %v", errs)
+	}
+}
+
+func TestValidate_LoadTask_InvalidMode(t *testing.T) {
+	cfg := &config.ProjectConfig{
+		DAG: config.DAGConfig{Name: "test"},
+		Tasks: []config.TaskConfig{
+			{Name: "load_data", Type: "load", Source: "data/output.parquet", Table: "staging.raw_data", Mode: "invalid"},
+		},
+	}
+	errs := Validate(cfg, t.TempDir())
+	found := false
+	for _, e := range errs {
+		if strings.Contains(e.Error(), "invalid mode") {
+			found = true
+			break
+		}
+	}
+	if !found {
+		t.Errorf("Validate() expected 'invalid mode' error, got: %v", errs)
+	}
+}
+
+func TestValidate_ModeOnNonLoadTask(t *testing.T) {
+	cfg := &config.ProjectConfig{
+		DAG: config.DAGConfig{Name: "test"},
+		Tasks: []config.TaskConfig{
+			{Name: "regular_task", Mode: "append"},
+		},
+	}
+	errs := Validate(cfg, t.TempDir())
+	found := false
+	for _, e := range errs {
+		if strings.Contains(e.Error(), "mode is only valid on") {
+			found = true
+			break
+		}
+	}
+	if !found {
+		t.Errorf("Validate() expected 'mode is only valid on' error, got: %v", errs)
 	}
 }
 

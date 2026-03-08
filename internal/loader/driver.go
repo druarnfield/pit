@@ -21,8 +21,10 @@ type Driver interface {
 }
 
 var drivers = map[string]Driver{
-	"mssql":    &MSSQLDriver{},
-	"postgres": &PostgresDriver{},
+	"clickhouse": &ClickHouseDriver{},
+	"mssql":      &MSSQLDriver{},
+	"oracle":     &OracleDriver{},
+	"postgres":   &PostgresDriver{},
 }
 
 // GetDriver returns the Driver for the given name.

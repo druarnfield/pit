@@ -9,8 +9,17 @@ import (
 	mssql "github.com/microsoft/go-mssqldb"
 )
 
-// arrowTypeToMSSQL maps an Arrow data type to a MSSQL column type string.
-func arrowTypeToMSSQL(dt arrow.DataType) (string, error) {
+// MSSQLDriver implements the Driver interface for Microsoft SQL Server.
+type MSSQLDriver struct{}
+
+// DefaultSchema returns the default schema for MSSQL.
+func (d *MSSQLDriver) DefaultSchema() string { return "dbo" }
+
+// QuoteIdentifier wraps a name in MSSQL bracket-quoting.
+func (d *MSSQLDriver) QuoteIdentifier(name string) string { return "[" + name + "]" }
+
+// ArrowType maps an Arrow data type to a MSSQL column type string.
+func (d *MSSQLDriver) ArrowType(dt arrow.DataType) (string, error) {
 	switch dt.ID() {
 	case arrow.INT8:
 		return "SMALLINT", nil
@@ -49,11 +58,16 @@ func arrowTypeToMSSQL(dt arrow.DataType) (string, error) {
 	}
 }
 
-// createTableDDL builds a CREATE TABLE statement from an Arrow schema.
-func createTableDDL(schemaName, tableName string, schema *arrow.Schema) (string, error) {
+// SQLTypeToArrow maps a database type name to an Arrow data type.
+func (d *MSSQLDriver) SQLTypeToArrow(dbTypeName string) (arrow.DataType, error) {
+	return nil, fmt.Errorf("SQLTypeToArrow not yet implemented for MSSQL")
+}
+
+// buildCreateTableDDL builds a CREATE TABLE statement from an Arrow schema.
+func (d *MSSQLDriver) buildCreateTableDDL(schemaName, tableName string, schema *arrow.Schema) (string, error) {
 	var cols []string
 	for _, f := range schema.Fields() {
-		sqlType, err := arrowTypeToMSSQL(f.Type)
+		sqlType, err := d.ArrowType(f.Type)
 		if err != nil {
 			return "", fmt.Errorf("column %q: %w", f.Name, err)
 		}
@@ -67,50 +81,41 @@ func createTableDDL(schemaName, tableName string, schema *arrow.Schema) (string,
 	return ddl, nil
 }
 
-// joinStrings joins a slice of strings with a separator (avoids importing strings).
-func joinStrings(elems []string, sep string) string {
-	if len(elems) == 0 {
-		return ""
+// CreateTable creates a table in the database from an Arrow schema.
+func (d *MSSQLDriver) CreateTable(ctx context.Context, db *sql.DB, schema, table string, arrowSchema *arrow.Schema) error {
+	ddl, err := d.buildCreateTableDDL(schema, table, arrowSchema)
+	if err != nil {
+		return fmt.Errorf("building create table DDL: %w", err)
 	}
-	out := elems[0]
-	for _, e := range elems[1:] {
-		out += sep + e
+	if _, err := db.ExecContext(ctx, ddl); err != nil {
+		return fmt.Errorf("creating table: %w", err)
 	}
-	return out
+	return nil
 }
 
-// loadMSSQL streams Arrow record batches from the parquetStream into an MSSQL table.
+// DropTable drops a table if it exists.
+func (d *MSSQLDriver) DropTable(ctx context.Context, db *sql.DB, schema, table string) error {
+	dropSQL := fmt.Sprintf("IF OBJECT_ID('[%s].[%s]', 'U') IS NOT NULL DROP TABLE [%s].[%s]",
+		schema, table, schema, table)
+	if _, err := db.ExecContext(ctx, dropSQL); err != nil {
+		return fmt.Errorf("dropping table: %w", err)
+	}
+	return nil
+}
+
+// TruncateTable truncates a table.
+func (d *MSSQLDriver) TruncateTable(ctx context.Context, db *sql.DB, schema, table string) error {
+	truncateSQL := fmt.Sprintf("TRUNCATE TABLE [%s].[%s]", schema, table)
+	if _, err := db.ExecContext(ctx, truncateSQL); err != nil {
+		return fmt.Errorf("truncating table: %w", err)
+	}
+	return nil
+}
+
+// BulkLoad streams Arrow record batches from the parquetStream into an MSSQL table.
 // Only one row group's worth of data is held in memory at a time.
-func loadMSSQL(ctx context.Context, params LoadParams, stream *parquetStream) (int64, error) {
+func (d *MSSQLDriver) BulkLoad(ctx context.Context, db *sql.DB, params LoadParams, stream *parquetStream) (int64, error) {
 	schema := stream.Schema()
-
-	db, err := sql.Open("mssql", params.ConnStr)
-	if err != nil {
-		return 0, fmt.Errorf("opening mssql connection: %w", err)
-	}
-	defer db.Close()
-
-	if params.Mode == ModeCreateOrReplace {
-		dropSQL := fmt.Sprintf("IF OBJECT_ID('[%s].[%s]', 'U') IS NOT NULL DROP TABLE [%s].[%s]",
-			params.Schema, params.Table, params.Schema, params.Table)
-		if _, err := db.ExecContext(ctx, dropSQL); err != nil {
-			return 0, fmt.Errorf("dropping table: %w", err)
-		}
-		ddl, err := createTableDDL(params.Schema, params.Table, schema)
-		if err != nil {
-			return 0, fmt.Errorf("building create table DDL: %w", err)
-		}
-		if _, err := db.ExecContext(ctx, ddl); err != nil {
-			return 0, fmt.Errorf("creating table: %w", err)
-		}
-	}
-
-	if params.Mode == ModeTruncateAndLoad {
-		truncateSQL := fmt.Sprintf("TRUNCATE TABLE [%s].[%s]", params.Schema, params.Table)
-		if _, err := db.ExecContext(ctx, truncateSQL); err != nil {
-			return 0, fmt.Errorf("truncating table: %w", err)
-		}
-	}
 
 	// Build column names from Arrow schema
 	colNames := make([]string, schema.NumFields())
@@ -169,4 +174,16 @@ func loadMSSQL(ctx context.Context, params LoadParams, stream *parquetStream) (i
 	}
 
 	return totalRows, nil
+}
+
+// joinStrings joins a slice of strings with a separator (avoids importing strings).
+func joinStrings(elems []string, sep string) string {
+	if len(elems) == 0 {
+		return ""
+	}
+	out := elems[0]
+	for _, e := range elems[1:] {
+		out += sep + e
+	}
+	return out
 }

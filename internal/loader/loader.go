@@ -2,6 +2,7 @@ package loader
 
 import (
 	"context"
+	"database/sql"
 	"fmt"
 
 	"github.com/druarnfield/pit/internal/runner"
@@ -11,17 +12,17 @@ import (
 type LoadMode string
 
 const (
-	ModeAppend           LoadMode = "append"
-	ModeTruncateAndLoad  LoadMode = "truncate_and_load"
-	ModeCreateOrReplace  LoadMode = "create_or_replace"
+	ModeAppend          LoadMode = "append"
+	ModeTruncateAndLoad LoadMode = "truncate_and_load"
+	ModeCreateOrReplace LoadMode = "create_or_replace"
 )
 
 // LoadParams configures a data load operation.
 type LoadParams struct {
 	FilePath string   // path to the Parquet file
 	Table    string   // target table name
-	Schema   string   // target schema (default "dbo")
-	Mode     LoadMode // append or truncate_and_load
+	Schema   string   // target schema (default depends on driver)
+	Mode     LoadMode // append, truncate_and_load, or create_or_replace
 	ConnStr  string   // database connection string
 }
 
@@ -29,8 +30,18 @@ type LoadParams struct {
 // Data is streamed one row group at a time to keep memory usage steady.
 // Returns the number of rows loaded.
 func Load(ctx context.Context, params LoadParams) (int64, error) {
+	driverName, err := runner.DetectDriver(params.ConnStr)
+	if err != nil {
+		return 0, fmt.Errorf("detecting driver: %w", err)
+	}
+
+	drv, err := GetDriver(driverName)
+	if err != nil {
+		return 0, fmt.Errorf("getting driver: %w", err)
+	}
+
 	if params.Schema == "" {
-		params.Schema = "dbo"
+		params.Schema = drv.DefaultSchema()
 	}
 	if params.Mode == "" {
 		params.Mode = ModeAppend
@@ -42,15 +53,26 @@ func Load(ctx context.Context, params LoadParams) (int64, error) {
 	}
 	defer stream.Close()
 
-	driver, err := runner.DetectDriver(params.ConnStr)
+	db, err := sql.Open(driverName, params.ConnStr)
 	if err != nil {
-		return 0, fmt.Errorf("detecting driver: %w", err)
+		return 0, fmt.Errorf("opening database connection: %w", err)
+	}
+	defer db.Close()
+
+	if params.Mode == ModeCreateOrReplace {
+		if err := drv.DropTable(ctx, db, params.Schema, params.Table); err != nil {
+			return 0, err
+		}
+		if err := drv.CreateTable(ctx, db, params.Schema, params.Table, stream.Schema()); err != nil {
+			return 0, err
+		}
 	}
 
-	switch driver {
-	case "mssql":
-		return loadMSSQL(ctx, params, stream)
-	default:
-		return 0, fmt.Errorf("unsupported driver %q for bulk load", driver)
+	if params.Mode == ModeTruncateAndLoad {
+		if err := drv.TruncateTable(ctx, db, params.Schema, params.Table); err != nil {
+			return 0, err
+		}
 	}
+
+	return drv.BulkLoad(ctx, db, params, stream)
 }

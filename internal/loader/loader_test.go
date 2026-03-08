@@ -373,6 +373,7 @@ func containsStr(s, substr string) bool {
 }
 
 func TestArrowTypeToMSSQL(t *testing.T) {
+	d := &MSSQLDriver{}
 	tests := []struct {
 		name    string
 		dt      arrow.DataType
@@ -399,24 +400,25 @@ func TestArrowTypeToMSSQL(t *testing.T) {
 
 	for _, tt := range tests {
 		t.Run(tt.name, func(t *testing.T) {
-			got, err := arrowTypeToMSSQL(tt.dt)
+			got, err := d.ArrowType(tt.dt)
 			if tt.wantErr {
 				if err == nil {
-					t.Errorf("arrowTypeToMSSQL(%s) expected error, got nil", tt.dt)
+					t.Errorf("ArrowType(%s) expected error, got nil", tt.dt)
 				}
 				return
 			}
 			if err != nil {
-				t.Fatalf("arrowTypeToMSSQL(%s) unexpected error: %v", tt.dt, err)
+				t.Fatalf("ArrowType(%s) unexpected error: %v", tt.dt, err)
 			}
 			if got != tt.want {
-				t.Errorf("arrowTypeToMSSQL(%s) = %q, want %q", tt.dt, got, tt.want)
+				t.Errorf("ArrowType(%s) = %q, want %q", tt.dt, got, tt.want)
 			}
 		})
 	}
 }
 
 func TestCreateTableDDL(t *testing.T) {
+	d := &MSSQLDriver{}
 	schema := arrow.NewSchema([]arrow.Field{
 		{Name: "id", Type: arrow.PrimitiveTypes.Int32, Nullable: false},
 		{Name: "name", Type: arrow.BinaryTypes.String, Nullable: true},
@@ -424,9 +426,9 @@ func TestCreateTableDDL(t *testing.T) {
 		{Name: "active", Type: arrow.FixedWidthTypes.Boolean, Nullable: false},
 	}, nil)
 
-	ddl, err := createTableDDL("dbo", "test_table", schema)
+	ddl, err := d.buildCreateTableDDL("dbo", "test_table", schema)
 	if err != nil {
-		t.Fatalf("createTableDDL() unexpected error: %v", err)
+		t.Fatalf("buildCreateTableDDL() unexpected error: %v", err)
 	}
 
 	// Verify the DDL contains the expected fragments
@@ -445,15 +447,57 @@ func TestCreateTableDDL(t *testing.T) {
 }
 
 func TestCreateTableDDL_UnsupportedType(t *testing.T) {
+	d := &MSSQLDriver{}
 	schema := arrow.NewSchema([]arrow.Field{
 		{Name: "bad", Type: arrow.ListOf(arrow.PrimitiveTypes.Int32), Nullable: false},
 	}, nil)
 
-	_, err := createTableDDL("dbo", "test_table", schema)
+	_, err := d.buildCreateTableDDL("dbo", "test_table", schema)
 	if err == nil {
-		t.Error("createTableDDL() expected error for unsupported type, got nil")
+		t.Error("buildCreateTableDDL() expected error for unsupported type, got nil")
 	}
 	if !containsStr(err.Error(), "column \"bad\"") {
 		t.Errorf("error = %q, want it to mention column name", err)
+	}
+}
+
+func TestGetDriver_MSSQL(t *testing.T) {
+	drv, err := GetDriver("mssql")
+	if err != nil {
+		t.Fatalf("GetDriver(\"mssql\") unexpected error: %v", err)
+	}
+	if drv == nil {
+		t.Fatal("GetDriver(\"mssql\") returned nil driver")
+	}
+	if drv.DefaultSchema() != "dbo" {
+		t.Errorf("DefaultSchema() = %q, want %q", drv.DefaultSchema(), "dbo")
+	}
+}
+
+func TestGetDriver_Unknown(t *testing.T) {
+	_, err := GetDriver("sqlite")
+	if err == nil {
+		t.Fatal("GetDriver(\"sqlite\") expected error, got nil")
+	}
+	if !containsStr(err.Error(), "unsupported database driver") {
+		t.Errorf("error = %q, want it to contain %q", err, "unsupported database driver")
+	}
+}
+
+func TestMSSQLDriver_QuoteIdentifier(t *testing.T) {
+	d := &MSSQLDriver{}
+	tests := []struct {
+		input string
+		want  string
+	}{
+		{"dbo", "[dbo]"},
+		{"my_table", "[my_table]"},
+		{"", "[]"},
+	}
+	for _, tt := range tests {
+		got := d.QuoteIdentifier(tt.input)
+		if got != tt.want {
+			t.Errorf("QuoteIdentifier(%q) = %q, want %q", tt.input, got, tt.want)
+		}
 	}
 }

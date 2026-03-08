@@ -351,13 +351,13 @@ func TestLoadParams_Defaults(t *testing.T) {
 	_, err := Load(t.Context(), LoadParams{
 		FilePath: path,
 		Table:    "test_table",
-		ConnStr:  "postgres://host/db", // unsupported driver
+		ConnStr:  "fakedb://host/db", // unsupported driver
 	})
 	if err == nil {
 		t.Fatal("Load() expected error for unsupported driver, got nil")
 	}
-	// Error should mention driver lookup, not schema/mode
-	expected := "getting driver"
+	// Error should mention driver detection, not schema/mode
+	expected := "detecting driver"
 	if got := fmt.Sprintf("%v", err); !containsStr(got, expected) {
 		t.Errorf("error = %q, want it to contain %q", got, expected)
 	}
@@ -481,6 +481,136 @@ func TestGetDriver_Unknown(t *testing.T) {
 	}
 	if !containsStr(err.Error(), "unsupported database driver") {
 		t.Errorf("error = %q, want it to contain %q", err, "unsupported database driver")
+	}
+}
+
+func TestGetDriver_Postgres(t *testing.T) {
+	d, err := GetDriver("postgres")
+	if err != nil {
+		t.Fatalf("GetDriver(\"postgres\") unexpected error: %v", err)
+	}
+	if got := d.DefaultSchema(); got != "public" {
+		t.Errorf("DefaultSchema() = %q, want %q", got, "public")
+	}
+	if got := d.QuoteIdentifier("my_table"); got != `"my_table"` {
+		t.Errorf("QuoteIdentifier() = %q, want %q", got, `"my_table"`)
+	}
+}
+
+func TestPostgresDriver_ArrowType(t *testing.T) {
+	d := &PostgresDriver{}
+	tests := []struct {
+		dt   arrow.DataType
+		want string
+	}{
+		{arrow.PrimitiveTypes.Int32, "INTEGER"},
+		{arrow.PrimitiveTypes.Int64, "BIGINT"},
+		{arrow.PrimitiveTypes.Float64, "DOUBLE PRECISION"},
+		{arrow.BinaryTypes.String, "TEXT"},
+		{arrow.FixedWidthTypes.Boolean, "BOOLEAN"},
+		{&arrow.TimestampType{Unit: arrow.Microsecond}, "TIMESTAMP"},
+		{arrow.FixedWidthTypes.Date32, "DATE"},
+		{arrow.BinaryTypes.Binary, "BYTEA"},
+	}
+	for _, tt := range tests {
+		t.Run(tt.want, func(t *testing.T) {
+			got, err := d.ArrowType(tt.dt)
+			if err != nil {
+				t.Fatalf("ArrowType(%s) error: %v", tt.dt, err)
+			}
+			if got != tt.want {
+				t.Errorf("ArrowType(%s) = %q, want %q", tt.dt, got, tt.want)
+			}
+		})
+	}
+}
+
+func TestPostgresDriver_SQLTypeToArrow(t *testing.T) {
+	d := &PostgresDriver{}
+	tests := []struct {
+		dbType string
+		wantID arrow.Type
+	}{
+		{"INT4", arrow.INT32},
+		{"BIGINT", arrow.INT64},
+		{"TEXT", arrow.STRING},
+		{"BOOL", arrow.BOOL},
+		{"NUMERIC", arrow.STRING},
+		{"BYTEA", arrow.BINARY},
+	}
+	for _, tt := range tests {
+		t.Run(tt.dbType, func(t *testing.T) {
+			got, err := d.SQLTypeToArrow(tt.dbType)
+			if err != nil {
+				t.Fatalf("SQLTypeToArrow(%q) error: %v", tt.dbType, err)
+			}
+			if got.ID() != tt.wantID {
+				t.Errorf("SQLTypeToArrow(%q) = %s, want %s", tt.dbType, got, tt.wantID)
+			}
+		})
+	}
+}
+
+func TestPostgresDriver_BuildCreateTableDDL(t *testing.T) {
+	d := &PostgresDriver{}
+	schema := arrow.NewSchema([]arrow.Field{
+		{Name: "id", Type: arrow.PrimitiveTypes.Int32, Nullable: false},
+		{Name: "name", Type: arrow.BinaryTypes.String, Nullable: true},
+	}, nil)
+	ddl, err := d.buildCreateTableDDL("public", "test_table", schema)
+	if err != nil {
+		t.Fatalf("buildCreateTableDDL() error: %v", err)
+	}
+	expectations := []string{
+		`CREATE TABLE "public"."test_table"`,
+		`"id" INTEGER NOT NULL`,
+		`"name" TEXT NULL`,
+	}
+	for _, exp := range expectations {
+		if !containsStr(ddl, exp) {
+			t.Errorf("DDL missing %q\ngot:\n%s", exp, ddl)
+		}
+	}
+}
+
+func TestMSSQLDriver_SQLTypeToArrow(t *testing.T) {
+	d := &MSSQLDriver{}
+	tests := []struct {
+		dbType string
+		wantID arrow.Type
+	}{
+		{"INT", arrow.INT32},
+		{"BIGINT", arrow.INT64},
+		{"SMALLINT", arrow.INT16},
+		{"TINYINT", arrow.UINT8},
+		{"FLOAT", arrow.FLOAT64},
+		{"REAL", arrow.FLOAT32},
+		{"NVARCHAR", arrow.STRING},
+		{"BIT", arrow.BOOL},
+		{"DATETIME2", arrow.TIMESTAMP},
+		{"DATE", arrow.DATE32},
+		{"VARBINARY", arrow.BINARY},
+		{"DECIMAL", arrow.STRING},
+		{"MONEY", arrow.STRING},
+	}
+	for _, tt := range tests {
+		t.Run(tt.dbType, func(t *testing.T) {
+			got, err := d.SQLTypeToArrow(tt.dbType)
+			if err != nil {
+				t.Fatalf("SQLTypeToArrow(%q) error: %v", tt.dbType, err)
+			}
+			if got.ID() != tt.wantID {
+				t.Errorf("SQLTypeToArrow(%q).ID() = %s, want %s", tt.dbType, got.ID(), tt.wantID)
+			}
+		})
+	}
+}
+
+func TestMSSQLDriver_SQLTypeToArrow_Unsupported(t *testing.T) {
+	d := &MSSQLDriver{}
+	_, err := d.SQLTypeToArrow("GEOMETRY")
+	if err == nil {
+		t.Error("SQLTypeToArrow(\"GEOMETRY\") expected error, got nil")
 	}
 }
 

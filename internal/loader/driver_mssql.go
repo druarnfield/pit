@@ -4,6 +4,7 @@ import (
 	"context"
 	"database/sql"
 	"fmt"
+	"strings"
 
 	"github.com/apache/arrow-go/v18/arrow"
 	mssql "github.com/microsoft/go-mssqldb"
@@ -60,7 +61,34 @@ func (d *MSSQLDriver) ArrowType(dt arrow.DataType) (string, error) {
 
 // SQLTypeToArrow maps a database type name to an Arrow data type.
 func (d *MSSQLDriver) SQLTypeToArrow(dbTypeName string) (arrow.DataType, error) {
-	return nil, fmt.Errorf("SQLTypeToArrow not yet implemented for MSSQL")
+	switch strings.ToUpper(dbTypeName) {
+	case "INT":
+		return arrow.PrimitiveTypes.Int32, nil
+	case "BIGINT":
+		return arrow.PrimitiveTypes.Int64, nil
+	case "SMALLINT":
+		return arrow.PrimitiveTypes.Int16, nil
+	case "TINYINT":
+		return arrow.PrimitiveTypes.Uint8, nil
+	case "REAL":
+		return arrow.PrimitiveTypes.Float32, nil
+	case "FLOAT":
+		return arrow.PrimitiveTypes.Float64, nil
+	case "NVARCHAR", "VARCHAR", "CHAR", "NCHAR", "NTEXT", "TEXT", "XML", "UNIQUEIDENTIFIER":
+		return arrow.BinaryTypes.String, nil
+	case "BIT":
+		return arrow.FixedWidthTypes.Boolean, nil
+	case "DATETIME", "DATETIME2", "SMALLDATETIME", "DATETIMEOFFSET":
+		return &arrow.TimestampType{Unit: arrow.Microsecond}, nil
+	case "DATE":
+		return arrow.FixedWidthTypes.Date32, nil
+	case "VARBINARY", "BINARY", "IMAGE":
+		return arrow.BinaryTypes.Binary, nil
+	case "DECIMAL", "NUMERIC", "MONEY", "SMALLMONEY":
+		return arrow.BinaryTypes.String, nil // String avoids precision loss
+	default:
+		return nil, fmt.Errorf("unsupported MSSQL type %q for Arrow mapping", dbTypeName)
+	}
 }
 
 // buildCreateTableDDL builds a CREATE TABLE statement from an Arrow schema.

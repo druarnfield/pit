@@ -314,6 +314,22 @@ func TestDiscover_NoProjects(t *testing.T) {
 	}
 }
 
+func TestLoad_TransformProject(t *testing.T) {
+	cfg, err := Load(filepath.Join("testdata", "transform_project", "pit.toml"))
+	if err != nil {
+		t.Fatalf("Load() error: %v", err)
+	}
+	if cfg.DAG.Transform == nil {
+		t.Fatal("DAG.Transform is nil, want non-nil")
+	}
+	if cfg.DAG.Transform.Dialect != "mssql" {
+		t.Errorf("Transform.Dialect = %q, want %q", cfg.DAG.Transform.Dialect, "mssql")
+	}
+	if cfg.DAG.SQL.Connection != "warehouse_db" {
+		t.Errorf("SQL.Connection = %q, want %q", cfg.DAG.SQL.Connection, "warehouse_db")
+	}
+}
+
 // mkTestProject creates a minimal project directory with a pit.toml.
 func mkTestProject(t *testing.T, dir, tomlContent string) {
 	t.Helper()

@@ -51,8 +51,9 @@ type DAGConfig struct {
 	KeepArtifacts []string        `toml:"keep_artifacts"`
 	GitURL        string          `toml:"git_url"`
 	GitRef        string          `toml:"git_ref"`
-	SQL           SQLConfig       `toml:"sql"`
-	FTPWatch      *FTPWatchConfig `toml:"ftp_watch"`
+	SQL           SQLConfig        `toml:"sql"`
+	Transform     *TransformConfig `toml:"transform"`
+	FTPWatch      *FTPWatchConfig  `toml:"ftp_watch"`
 	Webhook       *WebhookConfig  `toml:"webhook"`
 	DBT           *DBTConfig      `toml:"dbt"`
 }
@@ -92,6 +93,11 @@ type FTPWatchConfig struct {
 // SQLConfig holds the default SQL connection for a project's .sql tasks.
 type SQLConfig struct {
 	Connection string `toml:"connection"`
+}
+
+// TransformConfig holds the SQL transform engine configuration.
+type TransformConfig struct {
+	Dialect string `toml:"dialect"` // e.g. "mssql"
 }
 
 // TaskConfig holds a single task definition.

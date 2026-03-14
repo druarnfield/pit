@@ -1,0 +1,10 @@
+[dag]
+name = "test_transforms"
+schedule = "0 7 * * *"
+timeout = "30m"
+
+[dag.sql]
+connection = "warehouse_db"
+
+[dag.transform]
+dialect = "mssql"

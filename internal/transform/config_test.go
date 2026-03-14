@@ -43,6 +43,9 @@ func TestParseModelConfigs_NestedDefaults(t *testing.T) {
 	if err != nil {
 		t.Fatalf("ParseModelConfigs() error: %v", err)
 	}
+	if len(configs) != 3 {
+		t.Fatalf("got %d configs, want 3; keys: %v", len(configs), configKeys(configs))
+	}
 
 	tests := []struct {
 		name         string
@@ -80,14 +83,22 @@ func TestParseModelConfigs_NestedDefaults(t *testing.T) {
 func TestParseModelConfigs_DuplicateModelName(t *testing.T) {
 	dir := t.TempDir()
 	// Create two .sql files with the same name in different subdirs
-	os.MkdirAll(filepath.Join(dir, "a"), 0o755)
-	os.MkdirAll(filepath.Join(dir, "b"), 0o755)
-	os.WriteFile(filepath.Join(dir, "a", "dup.sql"), []byte("SELECT 1"), 0o644)
-	os.WriteFile(filepath.Join(dir, "b", "dup.sql"), []byte("SELECT 2"), 0o644)
+	if err := os.MkdirAll(filepath.Join(dir, "a"), 0o755); err != nil {
+		t.Fatalf("setup: %v", err)
+	}
+	if err := os.MkdirAll(filepath.Join(dir, "b"), 0o755); err != nil {
+		t.Fatalf("setup: %v", err)
+	}
+	if err := os.WriteFile(filepath.Join(dir, "a", "dup.sql"), []byte("SELECT 1"), 0o644); err != nil {
+		t.Fatalf("setup: %v", err)
+	}
+	if err := os.WriteFile(filepath.Join(dir, "b", "dup.sql"), []byte("SELECT 2"), 0o644); err != nil {
+		t.Fatalf("setup: %v", err)
+	}
 
 	_, err := ParseModelConfigs(dir)
 	if err == nil {
-		t.Errorf("expected error for duplicate model name, got nil")
+		t.Fatalf("expected error for duplicate model name, got nil")
 	}
 	if !strings.Contains(err.Error(), "duplicate model name") {
 		t.Errorf("error = %q, want it to contain %q", err, "duplicate model name")

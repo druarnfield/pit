@@ -75,8 +75,8 @@ func discoverModels(modelsDir string) (map[string]string, error) {
 			return nil
 		}
 		name := strings.TrimSuffix(d.Name(), ".sql")
-		if _, exists := models[name]; exists {
-			return fmt.Errorf("duplicate model name %q", name)
+		if existing, exists := models[name]; exists {
+			return fmt.Errorf("duplicate model name %q: %s and %s", name, existing, path)
 		}
 		models[name] = path
 		return nil
@@ -133,12 +133,17 @@ func ParseModelConfigs(modelsDir string) (map[string]*ModelConfig, error) {
 		modelDir := filepath.Dir(sqlPath)
 
 		// Apply defaults from TOML files, outermost to innermost
-		mc = applyDefaults(mc, modelDir, modelsDir, tomlEntries)
+		mc, err = applyDefaults(mc, modelDir, modelsDir, tomlEntries)
+		if err != nil {
+			return nil, err
+		}
 
-		// Apply per-model overrides
+		// Apply per-model overrides (only from ancestor or same-level directories)
 		for _, entry := range tomlEntries {
 			if override, ok := entry.models[name]; ok {
-				mc = mergeConfig(mc, override)
+				if isAncestorOrEqual(entry.dir, modelDir) {
+					mc = mergeConfig(mc, override)
+				}
 			}
 		}
 
@@ -148,12 +153,22 @@ func ParseModelConfigs(modelsDir string) (map[string]*ModelConfig, error) {
 	return result, nil
 }
 
+// isAncestorOrEqual reports whether dir is an ancestor of (or equal to) target.
+func isAncestorOrEqual(dir, target string) bool {
+	rel, err := filepath.Rel(dir, target)
+	if err != nil {
+		return false
+	}
+	// rel must not start with ".." — that would mean dir is not an ancestor
+	return !strings.HasPrefix(rel, "..")
+}
+
 // applyDefaults resolves defaults by walking from modelsDir down to modelDir.
-func applyDefaults(mc *ModelConfig, modelDir, modelsDir string, entries []tomlEntry) *ModelConfig {
+func applyDefaults(mc *ModelConfig, modelDir, modelsDir string, entries []tomlEntry) (*ModelConfig, error) {
 	// Build path from modelsDir to modelDir
 	rel, err := filepath.Rel(modelsDir, modelDir)
 	if err != nil {
-		return mc
+		return nil, fmt.Errorf("computing relative path from %q to %q: %w", modelsDir, modelDir, err)
 	}
 
 	// Collect directories from root to leaf
@@ -177,7 +192,7 @@ func applyDefaults(mc *ModelConfig, modelDir, modelsDir string, entries []tomlEn
 		}
 	}
 
-	return mc
+	return mc, nil
 }
 
 // mergeConfig overlays non-zero values from overlay onto base.

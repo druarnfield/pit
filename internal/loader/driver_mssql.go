@@ -173,9 +173,9 @@ func (d *MSSQLDriver) BulkLoad(ctx context.Context, db *sql.DB, params LoadParam
 		numRows := int(rec.NumRows())
 		numCols := int(rec.NumCols())
 
-		for row := 0; row < numRows; row++ {
-			vals := make([]interface{}, numCols)
-			for col := 0; col < numCols; col++ {
+		for row := range numRows {
+			vals := make([]any, numCols)
+			for col := range numCols {
 				v, err := arrowValue(rec.Column(col), row)
 				if err != nil {
 					return totalRows, fmt.Errorf("row %d col %d: %w", row, col, err)
@@ -209,9 +209,10 @@ func joinStrings(elems []string, sep string) string {
 	if len(elems) == 0 {
 		return ""
 	}
-	out := elems[0]
+	var out strings.Builder
+	out.WriteString(elems[0])
 	for _, e := range elems[1:] {
-		out += sep + e
+		out.WriteString(sep + e)
 	}
-	return out
+	return out.String()
 }

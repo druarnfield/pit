@@ -797,6 +797,80 @@ func TestValidate_ModeOnNonLoadTask(t *testing.T) {
 	}
 }
 
+func TestValidate_TransformValid(t *testing.T) {
+	cfg := loadTestdata(t, "transform_valid")
+	errs := Validate(cfg, cfg.Dir())
+	if len(errs) != 0 {
+		t.Errorf("Validate() returned %d errors, want 0:", len(errs))
+		for _, e := range errs {
+			t.Errorf("  %s", e)
+		}
+	}
+}
+
+func TestValidate_TransformNoSQL(t *testing.T) {
+	dir := t.TempDir()
+	// Create models/ dir so that check passes
+	os.MkdirAll(filepath.Join(dir, "models"), 0o755)
+
+	cfg := &config.ProjectConfig{}
+	cfg.DAG.Name = "test"
+	cfg.DAG.Transform = &config.TransformConfig{Dialect: "mssql"}
+	// No [dag.sql] connection
+
+	errs := Validate(cfg, dir)
+	found := false
+	for _, e := range errs {
+		if strings.Contains(e.Error(), "connection") {
+			found = true
+		}
+	}
+	if !found {
+		t.Errorf("expected validation error about missing SQL connection, got: %v", errs)
+	}
+}
+
+func TestValidate_TransformNoDialect(t *testing.T) {
+	dir := t.TempDir()
+	os.MkdirAll(filepath.Join(dir, "models"), 0o755)
+
+	cfg := &config.ProjectConfig{}
+	cfg.DAG.Name = "test"
+	cfg.DAG.SQL.Connection = "test_db"
+	cfg.DAG.Transform = &config.TransformConfig{} // empty dialect
+
+	errs := Validate(cfg, dir)
+	found := false
+	for _, e := range errs {
+		if strings.Contains(e.Error(), "dialect") {
+			found = true
+		}
+	}
+	if !found {
+		t.Errorf("expected validation error about missing dialect, got: %v", errs)
+	}
+}
+
+func TestValidate_TransformNoModelsDir(t *testing.T) {
+	dir := t.TempDir()
+	cfg := &config.ProjectConfig{}
+	cfg.DAG.Name = "test"
+	cfg.DAG.SQL.Connection = "test_db"
+	cfg.DAG.Transform = &config.TransformConfig{Dialect: "mssql"}
+	// No models/ directory exists
+
+	errs := Validate(cfg, dir)
+	found := false
+	for _, e := range errs {
+		if strings.Contains(e.Error(), "models") {
+			found = true
+		}
+	}
+	if !found {
+		t.Errorf("expected validation error about missing models directory, got: %v", errs)
+	}
+}
+
 // loadTestdata loads a ProjectConfig from testdata/<name>/pit.toml.
 func loadTestdata(t *testing.T, name string) *config.ProjectConfig {
 	t.Helper()

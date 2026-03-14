@@ -194,6 +194,32 @@ func Validate(cfg *config.ProjectConfig, projectDir string) []*ValidationError {
 		}
 	}
 
+	// Validate transform config
+	if cfg.DAG.Transform != nil {
+		if cfg.DAG.SQL.Connection == "" {
+			errs = append(errs, &ValidationError{
+				DAG:     dagName,
+				Message: "transform projects require a [dag.sql] connection",
+			})
+		}
+		if cfg.DAG.Transform.Dialect == "" {
+			errs = append(errs, &ValidationError{
+				DAG:     dagName,
+				Message: "transform projects require a dialect (e.g. \"mssql\")",
+			})
+		}
+		// Check models/ directory exists (skip for git-backed projects)
+		if cfg.DAG.GitURL == "" {
+			modelsDir := filepath.Join(projectDir, "models")
+			if info, err := os.Stat(modelsDir); err != nil || !info.IsDir() {
+				errs = append(errs, &ValidationError{
+					DAG:     dagName,
+					Message: "transform projects require a models/ directory",
+				})
+			}
+		}
+	}
+
 	// Validate dbt config
 	if cfg.DAG.DBT != nil {
 		errs = append(errs, validateDBT(cfg.DAG.DBT, dagName, projectDir, cfg.DAG.GitURL != "")...)

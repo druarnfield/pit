@@ -16,6 +16,7 @@ func TestValidType(t *testing.T) {
 		{"sql", true},
 		{"shell", true},
 		{"dbt", true},
+		{"transform", true},
 		{"ruby", false},
 		{"", false},
 		{"Python", false},
@@ -107,6 +108,52 @@ func TestCreate_DBT(t *testing.T) {
 		if _, err := os.Stat(path); err != nil {
 			t.Errorf("missing expected file: %s", f)
 		}
+	}
+}
+
+func TestCreate_Transform(t *testing.T) {
+	dir := t.TempDir()
+	if err := Create(dir, "my_transforms", TypeTransform); err != nil {
+		t.Fatalf("Create() error: %v", err)
+	}
+
+	// Check pit.toml exists and has [dag.transform]
+	pitToml := filepath.Join(dir, "projects", "my_transforms", "pit.toml")
+	data, err := os.ReadFile(pitToml)
+	if err != nil {
+		t.Fatalf("reading pit.toml: %v", err)
+	}
+	content := string(data)
+	if !strings.Contains(content, "[dag.transform]") {
+		t.Errorf("pit.toml missing [dag.transform] section")
+	}
+	if !strings.Contains(content, `dialect = "mssql"`) {
+		t.Errorf("pit.toml missing dialect setting")
+	}
+
+	// Check models/ directory exists
+	modelsDir := filepath.Join(dir, "projects", "my_transforms", "models")
+	info, err := os.Stat(modelsDir)
+	if err != nil || !info.IsDir() {
+		t.Errorf("models/ directory not created")
+	}
+
+	// Check defaults.toml exists
+	defaultsToml := filepath.Join(modelsDir, "defaults.toml")
+	if _, err := os.Stat(defaultsToml); err != nil {
+		t.Errorf("models/defaults.toml not created")
+	}
+
+	// Check sample model exists
+	sampleModel := filepath.Join(modelsDir, "example_model.sql")
+	if _, err := os.Stat(sampleModel); err != nil {
+		t.Errorf("models/example_model.sql not created")
+	}
+}
+
+func TestValidType_Transform(t *testing.T) {
+	if !ValidType("transform") {
+		t.Errorf("ValidType(%q) = false, want true", "transform")
 	}
 }
 

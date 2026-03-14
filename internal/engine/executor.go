@@ -19,6 +19,7 @@ import (
 	"github.com/druarnfield/pit/internal/runner"
 	"github.com/druarnfield/pit/internal/sdk"
 	"github.com/druarnfield/pit/internal/secrets"
+	"github.com/druarnfield/pit/internal/transform"
 )
 
 // ExecuteOpts configures a DAG execution.
@@ -138,6 +139,70 @@ func Execute(ctx context.Context, cfg *config.ProjectConfig, opts ExecuteOpts) (
 				opts.MetaStore.RecordEnvSnapshot(cfg.DAG.Name, hashType, hash, runID)
 			}
 		}
+	}
+
+	// If this is a transform project, compile models and merge into task list
+	if cfg.DAG.Transform != nil {
+		modelsDir := filepath.Join(snapshotDir, "models")
+		compiledDir := filepath.Join(snapshotDir, "compiled_models")
+
+		compileResult, err := transform.Compile(modelsDir, cfg.DAG.Transform.Dialect, compiledDir, cfg.Tasks)
+		if err != nil {
+			fmt.Fprintf(os.Stderr, "transform compilation failed: %v\n", err)
+			return nil, fmt.Errorf("compiling transform models: %w", err)
+		}
+
+		// Convert compiled models to task configs
+		var modelTasks []config.TaskConfig
+		for _, name := range compileResult.Order {
+			cm, ok := compileResult.Models[name]
+			if !ok {
+				continue // ephemeral model, skipped
+			}
+			tc := config.TaskConfig{
+				Name:   name,
+				Script: filepath.Join("compiled_models", name+".sql"),
+				Runner: "sql",
+			}
+			// Inherit dependencies from the model DAG
+			tc.DependsOn = compileResult.DAG.DependsOn(name)
+
+			// Merge with any explicit task config from pit.toml (timeout, retries, etc.)
+			for _, explicit := range cfg.Tasks {
+				if explicit.Name == name {
+					if explicit.Timeout.Duration > 0 {
+						tc.Timeout = explicit.Timeout
+					}
+					if explicit.Retries > 0 {
+						tc.Retries = explicit.Retries
+					}
+					if explicit.RetryDelay.Duration > 0 {
+						tc.RetryDelay = explicit.RetryDelay
+					}
+					break
+				}
+			}
+
+			if cm.Config.Connection != "" {
+				tc.Connection = cm.Config.Connection
+			}
+
+			modelTasks = append(modelTasks, tc)
+		}
+
+		// Add non-model tasks from pit.toml (Python tasks, shell tasks, etc.)
+		modelNames := make(map[string]bool)
+		for _, name := range compileResult.Order {
+			modelNames[name] = true
+		}
+		for _, tc := range cfg.Tasks {
+			if !modelNames[tc.Name] {
+				modelTasks = append(modelTasks, tc)
+			}
+		}
+
+		// Replace task list with merged models + tasks
+		cfg.Tasks = modelTasks
 	}
 
 	// Build Run from config

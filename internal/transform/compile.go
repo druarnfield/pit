@@ -65,6 +65,14 @@ func Compile(modelsDir, dialect, outDir string, tasks []config.TaskConfig) (*Com
 		DAG:    dag,
 	}
 
+	// Collect ephemeral model SQL before the main loop
+	ephemeralSQL := make(map[string]string)
+	for name, cfg := range configs {
+		if cfg.Materialization == "ephemeral" {
+			ephemeralSQL[name] = sqlContents[name]
+		}
+	}
+
 	for _, name := range dag.Order() {
 		cfg := configs[name]
 
@@ -74,7 +82,12 @@ func Compile(modelsDir, dialect, outDir string, tasks []config.TaskConfig) (*Com
 		}
 
 		// Render {{ ref }} and {{ this }}
-		rendered, err := RenderModel(name, sqlContents[name], configs)
+		var rendered string
+		if len(ephemeralSQL) > 0 {
+			rendered, err = RenderModelWithEphemerals(name, sqlContents[name], configs, ephemeralSQL)
+		} else {
+			rendered, err = RenderModel(name, sqlContents[name], configs)
+		}
 		if err != nil {
 			return nil, fmt.Errorf("rendering model %q: %w", name, err)
 		}

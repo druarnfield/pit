@@ -367,6 +367,7 @@ func workspaceGitignore() string {
 	return `runs/
 .venv/
 repo_cache/
+compiled_models/
 *.db
 secrets/
 `

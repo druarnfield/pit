@@ -46,8 +46,14 @@ func Load(ctx context.Context, params LoadParams) (int64, error) {
 	if params.Mode == "" {
 		params.Mode = ModeAppend
 	}
+	switch params.Mode {
+	case ModeAppend, ModeTruncateAndLoad, ModeCreateOrReplace:
+		// valid
+	default:
+		return 0, fmt.Errorf("unsupported load mode %q (must be append, truncate_and_load, or create_or_replace)", params.Mode)
+	}
 
-	stream, err := openParquetStream(params.FilePath)
+	stream, err := openParquetStream(ctx, params.FilePath)
 	if err != nil {
 		return 0, fmt.Errorf("reading parquet file: %w", err)
 	}

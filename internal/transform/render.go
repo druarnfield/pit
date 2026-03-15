@@ -48,6 +48,11 @@ func RenderModel(modelName, sql string, models map[string]*ModelConfig) (string,
 // RenderModelWithEphemerals renders a model, inlining any ephemeral refs as CTEs.
 // ephemeralSQL maps ephemeral model names to their raw SELECT SQL.
 func RenderModelWithEphemerals(modelName, sql string, models map[string]*ModelConfig, ephemeralSQL map[string]string) (string, error) {
+	currentModel, ok := models[modelName]
+	if !ok {
+		return "", fmt.Errorf("model %q not found in config", modelName)
+	}
+
 	// Collect ephemeral refs from this model's SQL
 	refs := ExtractRefs(sql)
 	var ctes []string
@@ -80,7 +85,6 @@ func RenderModelWithEphemerals(modelName, sql string, models map[string]*ModelCo
 			return QualifiedName(m.Schema, name), nil
 		},
 		"this": func() string {
-			currentModel := models[modelName]
 			return QualifiedName(currentModel.Schema, modelName)
 		},
 	}

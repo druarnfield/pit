@@ -1,10 +1,13 @@
 package engine
 
 import (
+	"path/filepath"
 	"testing"
+	"time"
 
 	"github.com/druarnfield/pit/internal/config"
 	"github.com/druarnfield/pit/internal/secrets"
+	"github.com/druarnfield/pit/internal/transform"
 )
 
 // TestRun_SecretsResolverNilInterface guards against the typed-nil interface
@@ -46,6 +49,155 @@ func TestResolveTaskConnection(t *testing.T) {
 	tc2 := &config.TaskConfig{}
 	if got := resolveTaskConnection(tc2, cfg); got != "default_conn" {
 		t.Errorf("got %q, want %q", got, "default_conn")
+	}
+}
+
+// mkCompileResult builds a CompileResult from inline data for use in executor tests.
+// modelDeps maps model name -> SQL snippet (use "{{ ref \"dep\" }}" to add edges).
+// ephemeralNames lists models that should be excluded from result.Models (ephemeral).
+func mkCompileResult(t *testing.T, modelSQL map[string]string, ephemeralNames []string) *transform.CompileResult {
+	t.Helper()
+	ephSet := make(map[string]bool, len(ephemeralNames))
+	for _, n := range ephemeralNames {
+		ephSet[n] = true
+	}
+
+	cfgs := make(map[string]*transform.ModelConfig, len(modelSQL))
+	for name := range modelSQL {
+		cfgs[name] = &transform.ModelConfig{Schema: "dbo", Materialization: "table"}
+	}
+
+	dag, err := transform.BuildDAG(cfgs, modelSQL, nil)
+	if err != nil {
+		t.Fatalf("BuildDAG: %v", err)
+	}
+
+	models := make(map[string]*transform.CompiledModel)
+	for _, name := range dag.Order() {
+		if !ephSet[name] {
+			models[name] = &transform.CompiledModel{
+				Name:        name,
+				Config:      cfgs[name],
+				CompiledSQL: "-- compiled: " + name,
+			}
+		}
+	}
+
+	return &transform.CompileResult{Models: models, Order: dag.Order(), DAG: dag}
+}
+
+func TestBuildTasksFromCompileResult_Basic(t *testing.T) {
+	result := mkCompileResult(t, map[string]string{
+		"stg_orders": "SELECT 1",
+		"fct_orders": `SELECT * FROM {{ ref "stg_orders" }}`,
+	}, nil)
+
+	tasks := buildTasksFromCompileResult(result, nil)
+
+	if len(tasks) != 2 {
+		t.Fatalf("got %d tasks, want 2", len(tasks))
+	}
+	byName := make(map[string]config.TaskConfig, len(tasks))
+	for _, tc := range tasks {
+		byName[tc.Name] = tc
+	}
+
+	stg, ok := byName["stg_orders"]
+	if !ok {
+		t.Fatal("stg_orders task missing")
+	}
+	if stg.Runner != "sql" {
+		t.Errorf("stg_orders.Runner = %q, want sql", stg.Runner)
+	}
+	wantScript := filepath.Join("compiled_models", "stg_orders.sql")
+	if stg.Script != wantScript {
+		t.Errorf("stg_orders.Script = %q, want %q", stg.Script, wantScript)
+	}
+
+	fct, ok := byName["fct_orders"]
+	if !ok {
+		t.Fatal("fct_orders task missing")
+	}
+	if len(fct.DependsOn) != 1 || fct.DependsOn[0] != "stg_orders" {
+		t.Errorf("fct_orders.DependsOn = %v, want [stg_orders]", fct.DependsOn)
+	}
+}
+
+func TestBuildTasksFromCompileResult_EphemeralSkipped(t *testing.T) {
+	result := mkCompileResult(t, map[string]string{
+		"ephemeral_base": "SELECT 1",
+		"fct_orders":     `SELECT * FROM {{ ref "ephemeral_base" }}`,
+	}, []string{"ephemeral_base"})
+
+	tasks := buildTasksFromCompileResult(result, nil)
+
+	if len(tasks) != 1 {
+		t.Fatalf("got %d tasks, want 1 (ephemeral should be excluded)", len(tasks))
+	}
+	if tasks[0].Name != "fct_orders" {
+		t.Errorf("tasks[0].Name = %q, want fct_orders", tasks[0].Name)
+	}
+}
+
+func TestBuildTasksFromCompileResult_NonModelTasksPreserved(t *testing.T) {
+	result := mkCompileResult(t, map[string]string{"stg_orders": "SELECT 1"}, nil)
+
+	existing := []config.TaskConfig{
+		{Name: "stg_orders"}, // model — replaced by compiled version
+		{Name: "run_python", Runner: "python", Script: "scripts/run.py"},
+	}
+
+	tasks := buildTasksFromCompileResult(result, existing)
+
+	if len(tasks) != 2 {
+		t.Fatalf("got %d tasks, want 2", len(tasks))
+	}
+	byName := make(map[string]config.TaskConfig, len(tasks))
+	for _, tc := range tasks {
+		byName[tc.Name] = tc
+	}
+
+	if got := byName["stg_orders"].Runner; got != "sql" {
+		t.Errorf("stg_orders.Runner = %q, want sql", got)
+	}
+	py, ok := byName["run_python"]
+	if !ok {
+		t.Fatal("run_python task missing")
+	}
+	if py.Script != "scripts/run.py" {
+		t.Errorf("run_python.Script = %q, want scripts/run.py", py.Script)
+	}
+}
+
+func TestBuildTasksFromCompileResult_MergesExplicitConfig(t *testing.T) {
+	result := mkCompileResult(t, map[string]string{"stg_orders": "SELECT 1"}, nil)
+	result.Models["stg_orders"].Config.Connection = "prod_db"
+
+	explicit := []config.TaskConfig{
+		{
+			Name:    "stg_orders",
+			Retries: 3,
+			Timeout: config.Duration{Duration: 5 * time.Minute},
+		},
+	}
+
+	tasks := buildTasksFromCompileResult(result, explicit)
+
+	if len(tasks) != 1 {
+		t.Fatalf("got %d tasks, want 1", len(tasks))
+	}
+	tc := tasks[0]
+	if tc.Retries != 3 {
+		t.Errorf("Retries = %d, want 3", tc.Retries)
+	}
+	if tc.Timeout.Duration != 5*time.Minute {
+		t.Errorf("Timeout = %v, want 5m", tc.Timeout.Duration)
+	}
+	if tc.Connection != "prod_db" {
+		t.Errorf("Connection = %q, want prod_db", tc.Connection)
+	}
+	if tc.Runner != "sql" {
+		t.Errorf("Runner = %q, want sql", tc.Runner)
 	}
 }
 

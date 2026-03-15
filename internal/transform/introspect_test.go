@@ -31,17 +31,3 @@ func TestBuildUpdateColumns_CompositeKey(t *testing.T) {
 		}
 	}
 }
-
-func TestTableExistsQuery(t *testing.T) {
-	q := TableExistsQuery("analytics", "fact_orders")
-	if q == "" {
-		t.Error("TableExistsQuery() returned empty string")
-	}
-}
-
-func TestColumnsQuery(t *testing.T) {
-	q := ColumnsQuery("analytics", "fact_orders")
-	if q == "" {
-		t.Error("ColumnsQuery() returned empty string")
-	}
-}

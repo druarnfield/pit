@@ -15,6 +15,7 @@ import (
 // parquetStream provides streaming access to a Parquet file's record batches.
 // Only one row group's worth of data is held in memory at a time.
 type parquetStream struct {
+	ctx        context.Context
 	file       *os.File
 	pf         *file.Reader
 	reader     *pqarrow.FileReader
@@ -30,8 +31,9 @@ type parquetStream struct {
 }
 
 // openParquetStream opens a Parquet file for streaming reads.
+// The provided ctx is used for cancellation during row-group reads.
 // Call Close() when done, even if iteration ends early.
-func openParquetStream(filePath string) (*parquetStream, error) {
+func openParquetStream(ctx context.Context, filePath string) (*parquetStream, error) {
 	f, err := os.Open(filePath)
 	if err != nil {
 		return nil, fmt.Errorf("opening file: %w", err)
@@ -63,7 +65,7 @@ func openParquetStream(filePath string) (*parquetStream, error) {
 		colIndices[i] = i
 	}
 
-	return &parquetStream{file: f, pf: pf, reader: reader, schema: schema, colIndices: colIndices}, nil
+	return &parquetStream{ctx: ctx, file: f, pf: pf, reader: reader, schema: schema, colIndices: colIndices}, nil
 }
 
 // Schema returns the Arrow schema of the Parquet file.
@@ -94,8 +96,8 @@ func (ps *parquetStream) Next() bool {
 			return false
 		}
 
-		// Read the next row group
-		tbl, err := ps.reader.ReadRowGroups(context.Background(), ps.colIndices, []int{ps.rgIdx})
+		// Read the next row group, respecting caller's context for cancellation
+		tbl, err := ps.reader.ReadRowGroups(ps.ctx, ps.colIndices, []int{ps.rgIdx})
 		if err != nil {
 			ps.err = fmt.Errorf("reading row group %d: %w", ps.rgIdx, err)
 			return false
@@ -127,7 +129,7 @@ func (ps *parquetStream) Close() {
 // readParquet reads all record batches from a Parquet file into memory.
 // Used by tests — production code should use openParquetStream for streaming.
 func readParquet(filePath string) ([]arrow.Record, *arrow.Schema, error) {
-	stream, err := openParquetStream(filePath)
+	stream, err := openParquetStream(context.Background(), filePath)
 	if err != nil {
 		return nil, nil, err
 	}

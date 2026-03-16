@@ -5,6 +5,64 @@ import (
 	"testing"
 )
 
+func TestSplitCTEPrefix(t *testing.T) {
+	tests := []struct {
+		name      string
+		sql       string
+		wantCTE   string
+		wantQuery string
+	}{
+		{
+			name:      "no CTE",
+			sql:       "SELECT * FROM orders",
+			wantCTE:   "",
+			wantQuery: "SELECT * FROM orders",
+		},
+		{
+			name:      "single CTE",
+			sql:       "WITH cte AS (\n    SELECT 1 AS n\n)\nSELECT * FROM cte",
+			wantCTE:   "WITH cte AS (\n    SELECT 1 AS n\n)",
+			wantQuery: "SELECT * FROM cte",
+		},
+		{
+			name:      "multiple CTEs",
+			sql:       "WITH a AS (SELECT 1), b AS (SELECT 2)\nSELECT * FROM a JOIN b ON 1=1",
+			wantCTE:   "WITH a AS (SELECT 1), b AS (SELECT 2)",
+			wantQuery: "SELECT * FROM a JOIN b ON 1=1",
+		},
+		{
+			name:      "nested parens inside CTE",
+			sql:       "WITH cte AS (SELECT CASE WHEN (x > 0) THEN 1 ELSE 0 END AS n FROM t)\nSELECT * FROM cte",
+			wantCTE:   "WITH cte AS (SELECT CASE WHEN (x > 0) THEN 1 ELSE 0 END AS n FROM t)",
+			wantQuery: "SELECT * FROM cte",
+		},
+		{
+			name:      "leading whitespace",
+			sql:       "  WITH cte AS (SELECT 1)\nSELECT * FROM cte",
+			wantCTE:   "WITH cte AS (SELECT 1)",
+			wantQuery: "SELECT * FROM cte",
+		},
+		{
+			name:      "plain SELECT not confused with WITH",
+			sql:       "SELECT * FROM t WHERE col = 'WITH'",
+			wantCTE:   "",
+			wantQuery: "SELECT * FROM t WHERE col = 'WITH'",
+		},
+	}
+
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			gotCTE, gotQuery := SplitCTEPrefix(tt.sql)
+			if gotCTE != tt.wantCTE {
+				t.Errorf("cteBlock = %q, want %q", gotCTE, tt.wantCTE)
+			}
+			if gotQuery != tt.wantQuery {
+				t.Errorf("selectSQL = %q, want %q", gotQuery, tt.wantQuery)
+			}
+		})
+	}
+}
+
 func TestRenderModel_RefResolution(t *testing.T) {
 	models := map[string]*ModelConfig{
 		"stg_orders": {Schema: "staging"},

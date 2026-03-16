@@ -116,12 +116,18 @@ func Compile(modelsDir, dialect, outDir string, tasks []config.TaskConfig) (*Com
 			matTemplate = "incremental_" + strategy
 		}
 
-		// Build materialization context
+		// Build materialization context.
+		// Split any leading WITH … CTE block from the SELECT body so templates
+		// that embed the SQL inside a subquery (USING/FROM) can lift the CTEs
+		// to statement scope where they are valid.
+		cteBlock, selectSQL := SplitCTEPrefix(rendered)
 		this := QualifiedName(cfg.Schema, name)
 		matCtx := &MaterializeContext{
 			ModelName:     name,
 			Schema:        cfg.Schema,
 			SQL:           rendered,
+			CTEBlock:      cteBlock,
+			SelectSQL:     selectSQL,
 			UniqueKey:     cfg.UniqueKey,
 			This:          this,
 			Columns:       cfg.Columns,

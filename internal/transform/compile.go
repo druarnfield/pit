@@ -89,6 +89,9 @@ func Compile(modelsDir, dialect, outDir string, tasks []config.TaskConfig) (*Com
 
 	for _, name := range dag.Order() {
 		cfg := configs[name]
+		if cfg == nil {
+			return nil, fmt.Errorf("model %q is referenced but has no SQL file", name)
+		}
 
 		// Skip ephemeral models
 		if cfg.Materialization == "ephemeral" {

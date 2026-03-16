@@ -37,13 +37,18 @@ func BuildDAG(models map[string]*ModelConfig, sqlContents map[string]string, tas
 		}
 	}
 
-	// Merge explicit depends_on from pit.toml [[tasks]]
+	// Merge explicit depends_on from pit.toml [[tasks]].
+	// Only add deps that are themselves models; non-model deps (e.g. seed
+	// loaders) control task ordering in the engine but must not enter the
+	// model DAG or they will appear in Order() without a ModelConfig.
 	for _, tc := range tasks {
 		if _, isModel := models[tc.Name]; !isModel {
 			continue
 		}
 		for _, dep := range tc.DependsOn {
-			edges[tc.Name] = appendUnique(edges[tc.Name], dep)
+			if _, isModel := models[dep]; isModel {
+				edges[tc.Name] = appendUnique(edges[tc.Name], dep)
+			}
 		}
 	}
 

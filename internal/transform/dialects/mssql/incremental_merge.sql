@@ -1,8 +1,10 @@
 BEGIN TRANSACTION;
-
+{{ if .CTEBlock }}
+{{ .CTEBlock }}
+{{ end }}
 MERGE {{ .This }} AS target
 USING (
-{{ .SQL }}
+{{ .SelectSQL }}
 ) AS source
 ON {{ range $i, $k := .UniqueKey }}{{ if $i }} AND {{ end }}target.[{{ $k }}] = source.[{{ $k }}]{{ end }}
 WHEN MATCHED THEN

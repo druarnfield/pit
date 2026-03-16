@@ -14,7 +14,9 @@ var dialectFS embed.FS
 type MaterializeContext struct {
 	ModelName     string
 	Schema        string
-	SQL           string
+	SQL           string // full rendered SQL (includes CTE prefix if any)
+	CTEBlock      string // leading WITH ... block extracted from SQL (empty if none)
+	SelectSQL     string // the final SELECT body without any CTE prefix
 	UniqueKey     []string
 	This          string
 	Columns       []string

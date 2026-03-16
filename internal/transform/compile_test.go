@@ -142,6 +142,52 @@ func TestCompile_IncrementalMergeMissingColumns(t *testing.T) {
 	}
 }
 
+func TestCompile_TableWithCTE(t *testing.T) {
+	dir := t.TempDir()
+	modelsDir := filepath.Join(dir, "models")
+	if err := os.MkdirAll(modelsDir, 0o755); err != nil {
+		t.Fatalf("setup: %v", err)
+	}
+
+	// Model SQL uses a CTE.
+	modelSQL := `WITH orders_agg AS (
+    SELECT customer_id, SUM(amount) AS total
+    FROM raw.orders
+    GROUP BY customer_id
+)
+SELECT customer_id, total FROM orders_agg`
+	if err := os.WriteFile(filepath.Join(modelsDir, "agg_orders.sql"), []byte(modelSQL), 0o644); err != nil {
+		t.Fatalf("setup: %v", err)
+	}
+	toml := "[defaults]\nmaterialization = \"table\"\nschema = \"dbo\"\n"
+	if err := os.WriteFile(filepath.Join(modelsDir, "models.toml"), []byte(toml), 0o644); err != nil {
+		t.Fatalf("setup: %v", err)
+	}
+
+	result, err := Compile(modelsDir, "mssql", t.TempDir(), nil)
+	if err != nil {
+		t.Fatalf("Compile() error: %v", err)
+	}
+
+	compiled := result.Models["agg_orders"].CompiledSQL
+
+	// CTE block must appear at statement scope, not inside a subquery.
+	cteIdx := strings.Index(compiled, "WITH orders_agg AS")
+	fromSubqIdx := strings.Index(compiled, "FROM (")
+	if cteIdx < 0 {
+		t.Fatalf("expected WITH CTE block in compiled SQL, got:\n%s", compiled)
+	}
+	if fromSubqIdx >= 0 && cteIdx > fromSubqIdx {
+		t.Errorf("CTE block appears inside a subquery (pos %d > FROM( pos %d), invalid T-SQL:\n%s",
+			cteIdx, fromSubqIdx, compiled)
+	}
+
+	// SELECT INTO must reference the target table.
+	if !strings.Contains(compiled, "INTO [dbo].[agg_orders]") {
+		t.Errorf("expected SELECT INTO target, got:\n%s", compiled)
+	}
+}
+
 func TestCompile_MissingMaterialization(t *testing.T) {
 	dir := t.TempDir()
 	modelsDir := filepath.Join(dir, "models")

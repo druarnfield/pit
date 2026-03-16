@@ -10,6 +10,88 @@ func QualifiedName(schema, name string) string {
 	return fmt.Sprintf("[%s].[%s]", schema, name)
 }
 
+// SplitCTEPrefix splits SQL of the form "WITH cte1 AS (...), cte2 AS (...) SELECT ..."
+// into the CTE block ("WITH cte1 AS (...), cte2 AS (...)") and the trailing SELECT body.
+// If the SQL does not begin with a WITH clause, cteBlock is empty and selectSQL is the
+// full input.
+//
+// The split uses a parenthesis-depth counter so nested parens inside CTE bodies are
+// handled correctly without requiring a full SQL parser.
+func SplitCTEPrefix(sql string) (cteBlock, selectSQL string) {
+	s := strings.TrimSpace(sql)
+
+	// Check for a case-insensitive WITH prefix followed by a word boundary.
+	if len(s) < 5 {
+		return "", s
+	}
+	upper := strings.ToUpper(s[:5])
+	if upper != "WITH " && upper != "WITH\t" && upper != "WITH\n" && upper != "WITH\r" {
+		return "", s
+	}
+
+	depth := 0
+	i := 0
+	for i < len(s) {
+		ch := s[i]
+		switch ch {
+		case '(':
+			depth++
+		case ')':
+			depth--
+			if depth == 0 {
+				// At the close of the last CTE body. Skip whitespace to find
+				// what follows — a comma means another CTE definition, anything
+				// else (SELECT/INSERT/…) is the final statement.
+				j := i + 1
+				for j < len(s) && (s[j] == ' ' || s[j] == '\t' || s[j] == '\n' || s[j] == '\r') {
+					j++
+				}
+				if j >= len(s) || s[j] != ',' {
+					return strings.TrimSpace(s[:i+1]), strings.TrimSpace(s[j:])
+				}
+			}
+		case '\'':
+			// Skip string literal (SQL standard: '' is an escaped single quote).
+			i++
+			for i < len(s) {
+				if s[i] == '\'' {
+					if i+1 < len(s) && s[i+1] == '\'' {
+						i++ // escaped quote
+					} else {
+						break
+					}
+				}
+				i++
+			}
+		case '-':
+			// Skip line comment.
+			if i+1 < len(s) && s[i+1] == '-' {
+				for i < len(s) && s[i] != '\n' {
+					i++
+				}
+				continue
+			}
+		case '/':
+			// Skip block comment.
+			if i+1 < len(s) && s[i+1] == '*' {
+				i += 2
+				for i+1 < len(s) {
+					if s[i] == '*' && s[i+1] == '/' {
+						i += 2
+						break
+					}
+					i++
+				}
+				continue
+			}
+		}
+		i++
+	}
+
+	// No split point found — return unchanged.
+	return "", s
+}
+
 // renderSQLTemplate replaces {{ ref "name" }}, {{ ref 'name' }}, and {{ this }}
 // patterns in SQL using regex substitution. This avoids conflicts between the
 // Go text/template engine and SQL literals that contain {{ or }} (e.g. JSON).

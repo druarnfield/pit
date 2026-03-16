@@ -25,5 +25,8 @@ secrets.toml
 # virtual environments
 .venv
 
+# Compiled transform models
+compiled_models/
+
 #build artifacts
 bin

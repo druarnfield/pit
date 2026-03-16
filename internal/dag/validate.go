@@ -85,25 +85,81 @@ func Validate(cfg *config.ProjectConfig, projectDir string) []*ValidationError {
 				})
 			}
 		}
-		if t.Runner == "dbt" {
-			// dbt tasks: script is a dbt command, not a file path
-			if t.Script == "" {
+		// Validate task type
+		validTypes := map[string]bool{"": true, "load": true, "save": true}
+		if !validTypes[t.Type] {
+			errs = append(errs, &ValidationError{
+				DAG:     dagName,
+				Task:    t.Name,
+				Message: fmt.Sprintf("invalid task type %q (must be load or save)", t.Type),
+			})
+		}
+
+		// mode only valid on load tasks
+		if t.Mode != "" && t.Type != "load" {
+			errs = append(errs, &ValidationError{
+				DAG:     dagName,
+				Task:    t.Name,
+				Message: "mode is only valid on type = \"load\" tasks",
+			})
+		}
+
+		if t.Type == "load" {
+			validModes := map[string]bool{"": true, "append": true, "truncate_and_load": true, "create_or_replace": true}
+			if !validModes[t.Mode] {
 				errs = append(errs, &ValidationError{
 					DAG:     dagName,
 					Task:    t.Name,
-					Message: "dbt task requires a non-empty script (dbt command, e.g. \"run --select staging\")",
+					Message: fmt.Sprintf("invalid mode %q (must be append, truncate_and_load, or create_or_replace)", t.Mode),
 				})
 			}
-		} else if t.Script != "" && cfg.DAG.GitURL == "" {
-			// Script existence can only be verified for local projects.
-			// For git-backed projects the source is not on disk until run time.
-			scriptPath := filepath.Join(projectDir, t.Script)
-			if _, err := os.Stat(scriptPath); os.IsNotExist(err) {
-				errs = append(errs, &ValidationError{
-					DAG:     dagName,
-					Task:    t.Name,
-					Message: fmt.Sprintf("script %q not found", t.Script),
-				})
+			if t.Source == "" {
+				errs = append(errs, &ValidationError{DAG: dagName, Task: t.Name, Message: "load task requires source"})
+			}
+			if t.Table == "" {
+				errs = append(errs, &ValidationError{DAG: dagName, Task: t.Name, Message: "load task requires table"})
+			}
+			if t.Script != "" {
+				errs = append(errs, &ValidationError{DAG: dagName, Task: t.Name, Message: "load task must not have script"})
+			}
+		}
+
+		if t.Type == "save" {
+			if t.Script == "" {
+				errs = append(errs, &ValidationError{DAG: dagName, Task: t.Name, Message: "save task requires script"})
+			}
+			if t.Output == "" {
+				errs = append(errs, &ValidationError{DAG: dagName, Task: t.Name, Message: "save task requires output"})
+			}
+			if t.Source != "" {
+				errs = append(errs, &ValidationError{DAG: dagName, Task: t.Name, Message: "save task must not have source"})
+			}
+			if t.Table != "" {
+				errs = append(errs, &ValidationError{DAG: dagName, Task: t.Name, Message: "save task must not have table"})
+			}
+		}
+
+		if t.Type != "load" {
+			if t.Runner == "dbt" {
+				// dbt tasks: script is a dbt command, not a file path
+				if t.Script == "" {
+					errs = append(errs, &ValidationError{
+						DAG:     dagName,
+						Task:    t.Name,
+						Message: "dbt task requires a non-empty script (dbt command, e.g. \"run --select staging\")",
+					})
+				}
+			} else if t.Script != "" && cfg.DAG.GitURL == "" {
+				// Script existence can only be verified for local projects.
+				// For git-backed projects the source is not on disk until run time.
+				scriptPath := filepath.Join(projectDir, t.Script)
+				if _, err := os.Stat(scriptPath); os.IsNotExist(err) {
+					errs = append(errs, &ValidationError{
+						DAG:     dagName,
+						Task:    t.Name,
+						Message: fmt.Sprintf("script %q not found", t.Script),
+					})
+				}
 			}
 		}
 	}
@@ -135,6 +191,32 @@ func Validate(cfg *config.ProjectConfig, projectDir string) []*ValidationError {
 				DAG:     dagName,
 				Message: fmt.Sprintf("invalid keep_artifacts value %q (must be logs, project, or data)", a),
 			})
+		}
+	}
+
+	// Validate transform config
+	if cfg.DAG.Transform != nil {
+		if cfg.DAG.SQL.Connection == "" {
+			errs = append(errs, &ValidationError{
+				DAG:     dagName,
+				Message: "transform projects require a [dag.sql] connection",
+			})
+		}
+		if cfg.DAG.Transform.Dialect == "" {
+			errs = append(errs, &ValidationError{
+				DAG:     dagName,
+				Message: "transform projects require a dialect (e.g. \"mssql\")",
+			})
+		}
+		// Check models/ directory exists (skip for git-backed projects)
+		if cfg.DAG.GitURL == "" {
+			modelsDir := filepath.Join(projectDir, "models")
+			if info, err := os.Stat(modelsDir); err != nil || !info.IsDir() {
+				errs = append(errs, &ValidationError{
+					DAG:     dagName,
+					Message: "transform projects require a models/ directory",
+				})
+			}
 		}
 	}
 

@@ -351,7 +351,7 @@ func TestLoadParams_Defaults(t *testing.T) {
 	_, err := Load(t.Context(), LoadParams{
 		FilePath: path,
 		Table:    "test_table",
-		ConnStr:  "postgres://host/db", // unsupported driver
+		ConnStr:  "fakedb://host/db", // unsupported driver
 	})
 	if err == nil {
 		t.Fatal("Load() expected error for unsupported driver, got nil")
@@ -373,6 +373,7 @@ func containsStr(s, substr string) bool {
 }
 
 func TestArrowTypeToMSSQL(t *testing.T) {
+	d := &MSSQLDriver{}
 	tests := []struct {
 		name    string
 		dt      arrow.DataType
@@ -399,24 +400,25 @@ func TestArrowTypeToMSSQL(t *testing.T) {
 
 	for _, tt := range tests {
 		t.Run(tt.name, func(t *testing.T) {
-			got, err := arrowTypeToMSSQL(tt.dt)
+			got, err := d.ArrowType(tt.dt)
 			if tt.wantErr {
 				if err == nil {
-					t.Errorf("arrowTypeToMSSQL(%s) expected error, got nil", tt.dt)
+					t.Errorf("ArrowType(%s) expected error, got nil", tt.dt)
 				}
 				return
 			}
 			if err != nil {
-				t.Fatalf("arrowTypeToMSSQL(%s) unexpected error: %v", tt.dt, err)
+				t.Fatalf("ArrowType(%s) unexpected error: %v", tt.dt, err)
 			}
 			if got != tt.want {
-				t.Errorf("arrowTypeToMSSQL(%s) = %q, want %q", tt.dt, got, tt.want)
+				t.Errorf("ArrowType(%s) = %q, want %q", tt.dt, got, tt.want)
 			}
 		})
 	}
 }
 
 func TestCreateTableDDL(t *testing.T) {
+	d := &MSSQLDriver{}
 	schema := arrow.NewSchema([]arrow.Field{
 		{Name: "id", Type: arrow.PrimitiveTypes.Int32, Nullable: false},
 		{Name: "name", Type: arrow.BinaryTypes.String, Nullable: true},
@@ -424,9 +426,9 @@ func TestCreateTableDDL(t *testing.T) {
 		{Name: "active", Type: arrow.FixedWidthTypes.Boolean, Nullable: false},
 	}, nil)
 
-	ddl, err := createTableDDL("dbo", "test_table", schema)
+	ddl, err := d.buildCreateTableDDL("dbo", "test_table", schema)
 	if err != nil {
-		t.Fatalf("createTableDDL() unexpected error: %v", err)
+		t.Fatalf("buildCreateTableDDL() unexpected error: %v", err)
 	}
 
 	// Verify the DDL contains the expected fragments
@@ -445,15 +447,413 @@ func TestCreateTableDDL(t *testing.T) {
 }
 
 func TestCreateTableDDL_UnsupportedType(t *testing.T) {
+	d := &MSSQLDriver{}
 	schema := arrow.NewSchema([]arrow.Field{
 		{Name: "bad", Type: arrow.ListOf(arrow.PrimitiveTypes.Int32), Nullable: false},
 	}, nil)
 
-	_, err := createTableDDL("dbo", "test_table", schema)
+	_, err := d.buildCreateTableDDL("dbo", "test_table", schema)
 	if err == nil {
-		t.Error("createTableDDL() expected error for unsupported type, got nil")
+		t.Error("buildCreateTableDDL() expected error for unsupported type, got nil")
 	}
 	if !containsStr(err.Error(), "column \"bad\"") {
 		t.Errorf("error = %q, want it to mention column name", err)
+	}
+}
+
+func TestGetDriver_MSSQL(t *testing.T) {
+	drv, err := GetDriver("mssql")
+	if err != nil {
+		t.Fatalf("GetDriver(\"mssql\") unexpected error: %v", err)
+	}
+	if drv == nil {
+		t.Fatal("GetDriver(\"mssql\") returned nil driver")
+	}
+	if drv.DefaultSchema() != "dbo" {
+		t.Errorf("DefaultSchema() = %q, want %q", drv.DefaultSchema(), "dbo")
+	}
+}
+
+func TestGetDriver_Unknown(t *testing.T) {
+	_, err := GetDriver("sqlite")
+	if err == nil {
+		t.Fatal("GetDriver(\"sqlite\") expected error, got nil")
+	}
+	if !containsStr(err.Error(), "unsupported database driver") {
+		t.Errorf("error = %q, want it to contain %q", err, "unsupported database driver")
+	}
+}
+
+func TestGetDriver_Postgres(t *testing.T) {
+	d, err := GetDriver("postgres")
+	if err != nil {
+		t.Fatalf("GetDriver(\"postgres\") unexpected error: %v", err)
+	}
+	if got := d.DefaultSchema(); got != "public" {
+		t.Errorf("DefaultSchema() = %q, want %q", got, "public")
+	}
+	if got := d.QuoteIdentifier("my_table"); got != `"my_table"` {
+		t.Errorf("QuoteIdentifier() = %q, want %q", got, `"my_table"`)
+	}
+}
+
+func TestPostgresDriver_ArrowType(t *testing.T) {
+	d := &PostgresDriver{}
+	tests := []struct {
+		dt   arrow.DataType
+		want string
+	}{
+		{arrow.PrimitiveTypes.Int32, "INTEGER"},
+		{arrow.PrimitiveTypes.Int64, "BIGINT"},
+		{arrow.PrimitiveTypes.Float64, "DOUBLE PRECISION"},
+		{arrow.BinaryTypes.String, "TEXT"},
+		{arrow.FixedWidthTypes.Boolean, "BOOLEAN"},
+		{&arrow.TimestampType{Unit: arrow.Microsecond}, "TIMESTAMP"},
+		{arrow.FixedWidthTypes.Date32, "DATE"},
+		{arrow.BinaryTypes.Binary, "BYTEA"},
+	}
+	for _, tt := range tests {
+		t.Run(tt.want, func(t *testing.T) {
+			got, err := d.ArrowType(tt.dt)
+			if err != nil {
+				t.Fatalf("ArrowType(%s) error: %v", tt.dt, err)
+			}
+			if got != tt.want {
+				t.Errorf("ArrowType(%s) = %q, want %q", tt.dt, got, tt.want)
+			}
+		})
+	}
+}
+
+func TestPostgresDriver_SQLTypeToArrow(t *testing.T) {
+	d := &PostgresDriver{}
+	tests := []struct {
+		dbType string
+		wantID arrow.Type
+	}{
+		{"INT4", arrow.INT32},
+		{"BIGINT", arrow.INT64},
+		{"TEXT", arrow.STRING},
+		{"BOOL", arrow.BOOL},
+		{"NUMERIC", arrow.STRING},
+		{"BYTEA", arrow.BINARY},
+	}
+	for _, tt := range tests {
+		t.Run(tt.dbType, func(t *testing.T) {
+			got, err := d.SQLTypeToArrow(tt.dbType)
+			if err != nil {
+				t.Fatalf("SQLTypeToArrow(%q) error: %v", tt.dbType, err)
+			}
+			if got.ID() != tt.wantID {
+				t.Errorf("SQLTypeToArrow(%q) = %s, want %s", tt.dbType, got, tt.wantID)
+			}
+		})
+	}
+}
+
+func TestPostgresDriver_BuildCreateTableDDL(t *testing.T) {
+	d := &PostgresDriver{}
+	schema := arrow.NewSchema([]arrow.Field{
+		{Name: "id", Type: arrow.PrimitiveTypes.Int32, Nullable: false},
+		{Name: "name", Type: arrow.BinaryTypes.String, Nullable: true},
+	}, nil)
+	ddl, err := d.buildCreateTableDDL("public", "test_table", schema)
+	if err != nil {
+		t.Fatalf("buildCreateTableDDL() error: %v", err)
+	}
+	expectations := []string{
+		`CREATE TABLE "public"."test_table"`,
+		`"id" INTEGER NOT NULL`,
+		`"name" TEXT NULL`,
+	}
+	for _, exp := range expectations {
+		if !containsStr(ddl, exp) {
+			t.Errorf("DDL missing %q\ngot:\n%s", exp, ddl)
+		}
+	}
+}
+
+func TestMSSQLDriver_SQLTypeToArrow(t *testing.T) {
+	d := &MSSQLDriver{}
+	tests := []struct {
+		dbType string
+		wantID arrow.Type
+	}{
+		{"INT", arrow.INT32},
+		{"BIGINT", arrow.INT64},
+		{"SMALLINT", arrow.INT16},
+		{"TINYINT", arrow.UINT8},
+		{"FLOAT", arrow.FLOAT64},
+		{"REAL", arrow.FLOAT32},
+		{"NVARCHAR", arrow.STRING},
+		{"BIT", arrow.BOOL},
+		{"DATETIME2", arrow.TIMESTAMP},
+		{"DATE", arrow.DATE32},
+		{"VARBINARY", arrow.BINARY},
+		{"DECIMAL", arrow.STRING},
+		{"MONEY", arrow.STRING},
+	}
+	for _, tt := range tests {
+		t.Run(tt.dbType, func(t *testing.T) {
+			got, err := d.SQLTypeToArrow(tt.dbType)
+			if err != nil {
+				t.Fatalf("SQLTypeToArrow(%q) error: %v", tt.dbType, err)
+			}
+			if got.ID() != tt.wantID {
+				t.Errorf("SQLTypeToArrow(%q).ID() = %s, want %s", tt.dbType, got.ID(), tt.wantID)
+			}
+		})
+	}
+}
+
+func TestMSSQLDriver_SQLTypeToArrow_Unsupported(t *testing.T) {
+	d := &MSSQLDriver{}
+	_, err := d.SQLTypeToArrow("GEOMETRY")
+	if err == nil {
+		t.Error("SQLTypeToArrow(\"GEOMETRY\") expected error, got nil")
+	}
+}
+
+func TestGetDriver_ClickHouse(t *testing.T) {
+	d, err := GetDriver("clickhouse")
+	if err != nil {
+		t.Fatalf("GetDriver(\"clickhouse\") unexpected error: %v", err)
+	}
+	if got := d.DefaultSchema(); got != "" {
+		t.Errorf("DefaultSchema() = %q, want empty", got)
+	}
+}
+
+func TestClickHouseDriver_ArrowType(t *testing.T) {
+	d := &ClickHouseDriver{}
+	tests := []struct {
+		dt   arrow.DataType
+		want string
+	}{
+		{arrow.PrimitiveTypes.Int8, "Int8"},
+		{arrow.PrimitiveTypes.Int32, "Int32"},
+		{arrow.PrimitiveTypes.Int64, "Int64"},
+		{arrow.PrimitiveTypes.Float32, "Float32"},
+		{arrow.PrimitiveTypes.Float64, "Float64"},
+		{arrow.BinaryTypes.String, "String"},
+		{arrow.FixedWidthTypes.Boolean, "Bool"},
+	}
+	for _, tt := range tests {
+		t.Run(tt.want, func(t *testing.T) {
+			got, err := d.ArrowType(tt.dt)
+			if err != nil {
+				t.Fatalf("ArrowType(%s) error: %v", tt.dt, err)
+			}
+			if got != tt.want {
+				t.Errorf("ArrowType(%s) = %q, want %q", tt.dt, got, tt.want)
+			}
+		})
+	}
+}
+
+func TestClickHouseDriver_SQLTypeToArrow(t *testing.T) {
+	d := &ClickHouseDriver{}
+	tests := []struct {
+		dbType string
+		wantID arrow.Type
+	}{
+		{"Int32", arrow.INT32},
+		{"Int64", arrow.INT64},
+		{"Float64", arrow.FLOAT64},
+		{"String", arrow.STRING},
+		{"Bool", arrow.BOOL},
+		{"UInt32", arrow.UINT32},
+	}
+	for _, tt := range tests {
+		t.Run(tt.dbType, func(t *testing.T) {
+			got, err := d.SQLTypeToArrow(tt.dbType)
+			if err != nil {
+				t.Fatalf("SQLTypeToArrow(%q) error: %v", tt.dbType, err)
+			}
+			if got.ID() != tt.wantID {
+				t.Errorf("SQLTypeToArrow(%q).ID() = %s, want %s", tt.dbType, got.ID(), tt.wantID)
+			}
+		})
+	}
+}
+
+func TestClickHouseDriver_SQLTypeToArrow_Nullable(t *testing.T) {
+	d := &ClickHouseDriver{}
+	got, err := d.SQLTypeToArrow("Nullable(Int32)")
+	if err != nil {
+		t.Fatalf("SQLTypeToArrow(\"Nullable(Int32)\") error: %v", err)
+	}
+	if got.ID() != arrow.INT32 {
+		t.Errorf("SQLTypeToArrow(\"Nullable(Int32)\").ID() = %s, want %s", got.ID(), arrow.INT32)
+	}
+}
+
+func TestClickHouseDriver_BuildCreateTableDDL(t *testing.T) {
+	d := &ClickHouseDriver{}
+	schema := arrow.NewSchema([]arrow.Field{
+		{Name: "id", Type: arrow.PrimitiveTypes.Int32, Nullable: false},
+		{Name: "name", Type: arrow.BinaryTypes.String, Nullable: true},
+	}, nil)
+	ddl, err := d.buildCreateTableDDL("", "test_table", schema)
+	if err != nil {
+		t.Fatalf("error: %v", err)
+	}
+	if !containsStr(ddl, "CREATE TABLE") {
+		t.Error("DDL missing CREATE TABLE")
+	}
+	if !containsStr(ddl, "MergeTree") {
+		t.Error("DDL missing MergeTree engine")
+	}
+	if !containsStr(ddl, "Nullable(String)") {
+		t.Error("DDL missing Nullable wrapper for nullable column")
+	}
+	if containsStr(ddl, "Nullable(Int32)") {
+		t.Error("DDL should not have Nullable wrapper for non-nullable column")
+	}
+}
+
+func TestClickHouseDriver_BuildCreateTableDDL_WithSchema(t *testing.T) {
+	d := &ClickHouseDriver{}
+	schema := arrow.NewSchema([]arrow.Field{
+		{Name: "id", Type: arrow.PrimitiveTypes.Int32, Nullable: false},
+	}, nil)
+	ddl, err := d.buildCreateTableDDL("mydb", "test_table", schema)
+	if err != nil {
+		t.Fatalf("error: %v", err)
+	}
+	if !containsStr(ddl, "`mydb`.`test_table`") {
+		t.Errorf("DDL missing schema-qualified name, got:\n%s", ddl)
+	}
+}
+
+func TestClickHouseDriver_QuoteIdentifier(t *testing.T) {
+	d := &ClickHouseDriver{}
+	if got := d.QuoteIdentifier("my_table"); got != "`my_table`" {
+		t.Errorf("QuoteIdentifier() = %q, want %q", got, "`my_table`")
+	}
+}
+
+func TestMSSQLDriver_QuoteIdentifier(t *testing.T) {
+	d := &MSSQLDriver{}
+	tests := []struct {
+		input string
+		want  string
+	}{
+		{"dbo", "[dbo]"},
+		{"my_table", "[my_table]"},
+		{"", "[]"},
+	}
+	for _, tt := range tests {
+		got := d.QuoteIdentifier(tt.input)
+		if got != tt.want {
+			t.Errorf("QuoteIdentifier(%q) = %q, want %q", tt.input, got, tt.want)
+		}
+	}
+}
+
+func TestGetDriver_Oracle(t *testing.T) {
+	d, err := GetDriver("oracle")
+	if err != nil {
+		t.Fatalf("GetDriver(\"oracle\") unexpected error: %v", err)
+	}
+	if got := d.DefaultSchema(); got != "" {
+		t.Errorf("DefaultSchema() = %q, want empty", got)
+	}
+}
+
+func TestOracleDriver_ArrowType(t *testing.T) {
+	d := &OracleDriver{}
+	tests := []struct {
+		dt   arrow.DataType
+		want string
+	}{
+		{arrow.PrimitiveTypes.Int32, "NUMBER(10)"},
+		{arrow.PrimitiveTypes.Int64, "NUMBER(19)"},
+		{arrow.PrimitiveTypes.Float32, "BINARY_FLOAT"},
+		{arrow.PrimitiveTypes.Float64, "BINARY_DOUBLE"},
+		{arrow.BinaryTypes.String, "CLOB"},
+		{arrow.FixedWidthTypes.Boolean, "NUMBER(1)"},
+		{&arrow.TimestampType{Unit: arrow.Microsecond}, "TIMESTAMP"},
+		{arrow.FixedWidthTypes.Date32, "DATE"},
+		{arrow.BinaryTypes.Binary, "BLOB"},
+	}
+	for _, tt := range tests {
+		t.Run(tt.want, func(t *testing.T) {
+			got, err := d.ArrowType(tt.dt)
+			if err != nil {
+				t.Fatalf("ArrowType(%s) error: %v", tt.dt, err)
+			}
+			if got != tt.want {
+				t.Errorf("ArrowType(%s) = %q, want %q", tt.dt, got, tt.want)
+			}
+		})
+	}
+}
+
+func TestOracleDriver_SQLTypeToArrow(t *testing.T) {
+	d := &OracleDriver{}
+	tests := []struct {
+		dbType string
+		wantID arrow.Type
+	}{
+		{"NUMBER", arrow.STRING},
+		{"BINARY_FLOAT", arrow.FLOAT32},
+		{"BINARY_DOUBLE", arrow.FLOAT64},
+		{"VARCHAR2", arrow.STRING},
+		{"CLOB", arrow.STRING},
+		{"TIMESTAMP", arrow.TIMESTAMP},
+		{"DATE", arrow.TIMESTAMP},
+		{"RAW", arrow.BINARY},
+		{"BLOB", arrow.BINARY},
+	}
+	for _, tt := range tests {
+		t.Run(tt.dbType, func(t *testing.T) {
+			got, err := d.SQLTypeToArrow(tt.dbType)
+			if err != nil {
+				t.Fatalf("SQLTypeToArrow(%q) error: %v", tt.dbType, err)
+			}
+			if got.ID() != tt.wantID {
+				t.Errorf("SQLTypeToArrow(%q).ID() = %s, want %s", tt.dbType, got.ID(), tt.wantID)
+			}
+		})
+	}
+}
+
+func TestOracleDriver_QuoteIdentifier(t *testing.T) {
+	d := &OracleDriver{}
+	if got := d.QuoteIdentifier("my_table"); got != `"MY_TABLE"` {
+		t.Errorf("QuoteIdentifier() = %q, want %q", got, `"MY_TABLE"`)
+	}
+}
+
+func TestOracleDriver_BuildCreateTableDDL(t *testing.T) {
+	d := &OracleDriver{}
+	schema := arrow.NewSchema([]arrow.Field{
+		{Name: "id", Type: arrow.PrimitiveTypes.Int32, Nullable: false},
+		{Name: "name", Type: arrow.BinaryTypes.String, Nullable: true},
+	}, nil)
+	ddl, err := d.buildCreateTableDDL("MYSCHEMA", "test_table", schema)
+	if err != nil {
+		t.Fatalf("error: %v", err)
+	}
+	if !containsStr(ddl, `"MYSCHEMA"."TEST_TABLE"`) {
+		t.Errorf("DDL missing schema.table, got:\n%s", ddl)
+	}
+	if !containsStr(ddl, "NUMBER(10)") {
+		t.Errorf("DDL missing NUMBER(10) for int32, got:\n%s", ddl)
+	}
+}
+
+func TestOracleDriver_BuildCreateTableDDL_NoSchema(t *testing.T) {
+	d := &OracleDriver{}
+	schema := arrow.NewSchema([]arrow.Field{
+		{Name: "id", Type: arrow.PrimitiveTypes.Int32, Nullable: false},
+	}, nil)
+	ddl, err := d.buildCreateTableDDL("", "test_table", schema)
+	if err != nil {
+		t.Fatalf("error: %v", err)
+	}
+	if !containsStr(ddl, `CREATE TABLE "TEST_TABLE"`) {
+		t.Errorf("DDL should use unqualified table when schema is empty, got:\n%s", ddl)
 	}
 }

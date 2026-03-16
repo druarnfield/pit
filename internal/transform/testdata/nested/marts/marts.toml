@@ -1,0 +1,6 @@
+[defaults]
+materialization = "table"
+schema = "analytics"
+
+[dim_customers]
+materialization = "view"

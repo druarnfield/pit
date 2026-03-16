@@ -1,0 +1,7 @@
+[defaults]
+materialization = "view"
+schema = "staging"
+
+[fact_orders]
+materialization = "table"
+schema = "analytics"

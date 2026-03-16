@@ -30,6 +30,7 @@ pit init my_pipeline                 # Python project (full package layout)
 pit init --type sql my_transforms    # SQL-only project (minimal)
 pit init --type shell my_jobs        # Shell-only project
 pit init --type dbt my_dbt_project   # dbt project (uvx-managed)
+pit init --type transform my_models  # SQL transform project (models → views/tables)
 
 # Validate all project configs
 pit validate
@@ -186,13 +187,14 @@ runner = "$ node"              # runs: node tasks/transform.js
 
 | Command | Description |
 |---------|-------------|
-| `pit new <name>` | Create a new workspace with config, sample project, and git repo (`--type python\|sql\|shell\|dbt`) |
+| `pit new <name>` | Create a new workspace with config, sample project, and git repo (`--type python\|sql\|shell\|dbt\|transform`) |
 | `pit validate` | Validate all `pit.toml` files (cycles, missing deps, script paths) |
-| `pit init <name>` | Scaffold a new project (`--type python\|sql\|shell\|dbt`) |
+| `pit init <name>` | Scaffold a new project (`--type python\|sql\|shell\|dbt\|transform`) |
 | `pit run <dag>[/<task>]` | Execute a DAG or single task (`--verbose` for live output) |
 | `pit serve [--port N]` | Run the scheduler with cron, FTP watch, webhook triggers, and REST API (default port: 9090) |
 | `pit logs <dag>[/<task>]` | View task logs (`--list` for runs, `--run-id` for specific run) |
 | `pit outputs` | List declared outputs (`--project`, `--type`, `--location` filters) |
+| `pit compile <dag>` | Compile transform models to SQL without executing |
 | `pit status` | Show latest run status for each DAG (requires metadata store) |
 | `pit secrets keygen` | Generate age identity, print public key |
 | `pit secrets encrypt` | One-time migration from plaintext secrets.toml |
@@ -638,13 +640,184 @@ name = "warehouse_transforms"
 connection = "warehouse_db"
 ```
 
-The connection name is resolved from the secrets file. Supported drivers:
+The connection name is resolved from the secrets file. Without `--secrets`, SQL tasks fall back to stub mode (log file contents without executing).
 
-| Connection string prefix | Driver |
-|-------------------------|--------|
-| `sqlserver://`, `mssql://` | Microsoft SQL Server |
+### Supported Databases
 
-Without `--secrets`, SQL tasks fall back to stub mode (log file contents without executing).
+| Database | Connection Prefix | Bulk Mechanism | Go Driver |
+|---|---|---|---|
+| MSSQL | `sqlserver://`, `mssql://` | `mssql.CopyIn` | go-mssqldb |
+| Postgres | `postgres://`, `postgresql://` | COPY protocol (pgx) | pgx/v5 |
+| ClickHouse | `clickhouse://` | Batch INSERT | clickhouse-go/v2 |
+| Oracle | `oracle://` | Prepared INSERT | go-ora/v2 |
+
+### SQL Task Types
+
+By default, a SQL task executes its script against the database. Two additional task types enable data movement between databases and Parquet files:
+
+| Type | Description |
+|------|-------------|
+| (default) | Execute SQL script against the database |
+| `type = "save"` | Execute a SQL query and save results to a Parquet file |
+| `type = "load"` | Load a Parquet file from the data directory into a database table |
+
+#### Task Config Fields
+
+| Field | Applies to | Description |
+|-------|-----------|-------------|
+| `type` | load, save | `"load"` or `"save"` (omit for default exec) |
+| `source` | load | Parquet file path relative to data directory |
+| `output` | save | Parquet file path relative to data directory |
+| `table` | load | Target table, supports `schema.table` format |
+| `mode` | load | `"append"` (default), `"truncate_and_load"`, or `"create_or_replace"` |
+| `connection` | all | Overrides `[dag.sql].connection` for this task |
+
+#### Save + Load Example
+
+```toml
+[dag]
+name = "cross_db_pipeline"
+
+[dag.sql]
+connection = "warehouse_db"
+
+[[tasks]]
+name = "extract_customers"
+type = "save"
+script = "tasks/extract.sql"
+output = "customers.parquet"
+connection = "oracle_source"
+
+[[tasks]]
+name = "load_customers"
+type = "load"
+source = "customers.parquet"
+table = "staging.customers"
+mode = "truncate_and_load"
+depends_on = ["extract_customers"]
+```
+
+This pattern extracts data from one database (Oracle) into a Parquet file, then bulk-loads it into another (the default warehouse connection). The Parquet file lives in the run's `data/` directory.
+
+## SQL Transform Engine
+
+Transform projects turn SQL SELECT statements into materialized database objects (views, tables, incrementals) without Python or dbt. Models are plain `.sql` files with Go template syntax for cross-references.
+
+### Scaffold
+
+```bash
+pit init --type transform my_transforms
+```
+
+### Project Structure
+
+```
+projects/my_transforms/
+├── pit.toml
+├── models/
+│   ├── defaults.toml          # default config for all models
+│   ├── staging/
+│   │   ├── defaults.toml      # override defaults for staging/
+│   │   └── stg_orders.sql
+│   └── marts/
+│       └── fct_orders.sql
+├── compiled_models/           # output of pit compile (gitignored)
+└── tasks/                     # optional regular tasks alongside models
+```
+
+### Configuration
+
+```toml
+[dag]
+name = "my_transforms"
+
+[dag.sql]
+connection = "warehouse_db"
+
+[dag.transform]
+dialect = "mssql"
+```
+
+Model configuration uses TOML files in the `models/` directory. A `[defaults]` section sets values for all models in that directory and below. Per-model overrides use the model name as a TOML key:
+
+```toml
+# models/defaults.toml
+[defaults]
+materialization = "view"
+schema = "dbo"
+
+# Override for a specific model
+[fct_orders]
+materialization = "table"
+schema = "marts"
+```
+
+| Field | Description |
+|-------|-------------|
+| `materialization` | `view`, `table`, `incremental`, or `ephemeral` |
+| `strategy` | Incremental strategy: `merge` or `delete_insert` |
+| `unique_key` | Columns for incremental match (array) |
+| `schema` | Target schema |
+| `connection` | Override `[dag.sql].connection` for this model |
+
+Defaults cascade: innermost `defaults.toml` wins, then per-model overrides on top.
+
+### Template Functions
+
+Models use Go template syntax:
+
+| Function | Description |
+|----------|-------------|
+| `{{ ref "model_name" }}` | Resolves to the fully qualified name of another model |
+| `{{ this }}` | Resolves to the current model's fully qualified name |
+
+### Materializations
+
+| Type | Behaviour |
+|------|-----------|
+| `view` | `CREATE OR ALTER VIEW` |
+| `table` | `DROP` + `SELECT INTO` |
+| `incremental` (merge) | `MERGE` on `unique_key` columns |
+| `incremental` (delete+insert) | Delete matching rows, then insert |
+| `ephemeral` | Not materialized — inlined as a CTE into downstream models |
+
+### Compiling
+
+Use `pit compile` to render all models without executing, useful for debugging:
+
+```bash
+pit compile my_transforms
+# Compiled 4 models to projects/my_transforms/compiled_models
+#   stg_orders (view)
+#   fct_orders (table)
+```
+
+### Example Models
+
+**Staging view** (`models/staging/stg_orders.sql`):
+
+```sql
+SELECT
+    id,
+    customer_id,
+    order_date,
+    total_amount
+FROM raw.orders
+WHERE is_deleted = 0
+```
+
+**Marts table** (`models/marts/fct_orders.sql`):
+
+```sql
+SELECT
+    o.id,
+    o.customer_id,
+    o.order_date,
+    o.total_amount
+FROM {{ ref "stg_orders" }} o
+```
+
+Dependencies between models are inferred from `{{ ref }}` calls. Pit builds a DAG and executes models in the correct order.
 
 ## dbt Projects
 

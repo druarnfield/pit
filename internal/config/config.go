@@ -51,8 +51,9 @@ type DAGConfig struct {
 	KeepArtifacts []string        `toml:"keep_artifacts"`
 	GitURL        string          `toml:"git_url"`
 	GitRef        string          `toml:"git_ref"`
-	SQL           SQLConfig       `toml:"sql"`
-	FTPWatch      *FTPWatchConfig `toml:"ftp_watch"`
+	SQL           SQLConfig        `toml:"sql"`
+	Transform     *TransformConfig `toml:"transform"`
+	FTPWatch      *FTPWatchConfig  `toml:"ftp_watch"`
 	Webhook       *WebhookConfig  `toml:"webhook"`
 	DBT           *DBTConfig      `toml:"dbt"`
 }
@@ -94,6 +95,11 @@ type SQLConfig struct {
 	Connection string `toml:"connection"`
 }
 
+// TransformConfig holds the SQL transform engine configuration.
+type TransformConfig struct {
+	Dialect string `toml:"dialect"` // e.g. "mssql"
+}
+
 // TaskConfig holds a single task definition.
 type TaskConfig struct {
 	Name       string   `toml:"name"`
@@ -103,6 +109,12 @@ type TaskConfig struct {
 	Timeout    Duration `toml:"timeout"`
 	Retries    int      `toml:"retries"`
 	RetryDelay Duration `toml:"retry_delay"`
+	Type       string   `toml:"type"`       // "load", "save", or "" (default exec)
+	Source     string   `toml:"source"`     // Parquet file for load
+	Output     string   `toml:"output"`     // Parquet file for save
+	Table      string   `toml:"table"`      // target table for load
+	Mode       string   `toml:"mode"`       // "append", "truncate_and_load", "create_or_replace"
+	Connection string   `toml:"connection"` // overrides [dag.sql].connection
 }
 
 // Output defines a DAG output artifact.

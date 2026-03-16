@@ -1,0 +1,8 @@
+[dag]
+name = "test_transforms"
+
+[dag.sql]
+connection = "warehouse_db"
+
+[dag.transform]
+dialect = "mssql"

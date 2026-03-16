@@ -19,24 +19,25 @@ import (
 	"github.com/druarnfield/pit/internal/runner"
 	"github.com/druarnfield/pit/internal/sdk"
 	"github.com/druarnfield/pit/internal/secrets"
+	"github.com/druarnfield/pit/internal/transform"
 )
 
 // ExecuteOpts configures a DAG execution.
 type ExecuteOpts struct {
-	RunsDir       string   // directory for run snapshots (default: "runs")
-	RepoCacheDir  string   // directory for persistent git clones (default: "repo_cache")
-	TaskName      string   // if set, only run this single task
-	Verbose       bool     // stream task output to stdout
-	Concurrency   int      // max parallel tasks (0 = unlimited)
-	SecretsPath   string   // path to secrets.toml (optional, empty = no secrets)
-	AgeIdentity   string   // path to age identity file (optional, for encrypted secrets)
-	DataSeedDir   string   // if set, copy contents into data dir before execution
-	DBTDriver     string   // ODBC driver for dbt profiles (default: config.DefaultDBTDriver)
-	KeepArtifacts []string           // which run subdirs to keep after completion (default: all)
-	MetaStore     MetadataRecorder   // nil = no metadata tracking
-	Trigger       string             // trigger source: "manual", "cron", "ftp_watch", "webhook"
-	LogHub        *loghub.Hub        // nil = no live log streaming
-	RunID         string             // if set, use this instead of generating (for webhook streaming)
+	RunsDir       string           // directory for run snapshots (default: "runs")
+	RepoCacheDir  string           // directory for persistent git clones (default: "repo_cache")
+	TaskName      string           // if set, only run this single task
+	Verbose       bool             // stream task output to stdout
+	Concurrency   int              // max parallel tasks (0 = unlimited)
+	SecretsPath   string           // path to secrets.toml (optional, empty = no secrets)
+	AgeIdentity   string           // path to age identity file (optional, for encrypted secrets)
+	DataSeedDir   string           // if set, copy contents into data dir before execution
+	DBTDriver     string           // ODBC driver for dbt profiles (default: config.DefaultDBTDriver)
+	KeepArtifacts []string         // which run subdirs to keep after completion (default: all)
+	MetaStore     MetadataRecorder // nil = no metadata tracking
+	Trigger       string           // trigger source: "manual", "cron", "ftp_watch", "webhook"
+	LogHub        *loghub.Hub      // nil = no live log streaming
+	RunID         string           // if set, use this instead of generating (for webhook streaming)
 }
 
 // Execute runs a DAG to completion.
@@ -138,6 +139,20 @@ func Execute(ctx context.Context, cfg *config.ProjectConfig, opts ExecuteOpts) (
 				opts.MetaStore.RecordEnvSnapshot(cfg.DAG.Name, hashType, hash, runID)
 			}
 		}
+	}
+
+	// If this is a transform project, compile models and merge into task list
+	if cfg.DAG.Transform != nil {
+		modelsDir := filepath.Join(snapshotDir, "models")
+		compiledDir := filepath.Join(snapshotDir, "compiled_models")
+
+		compileResult, err := transform.Compile(modelsDir, cfg.DAG.Transform.Dialect, compiledDir, cfg.Tasks)
+		if err != nil {
+			fmt.Fprintf(os.Stderr, "transform compilation failed: %v\n", err)
+			return nil, fmt.Errorf("compiling transform models: %w", err)
+		}
+
+		cfg.Tasks = buildTasksFromCompileResult(compileResult, cfg.Tasks)
 	}
 
 	// Build Run from config
@@ -434,6 +449,65 @@ func executeTask(ctx context.Context, ti *TaskInstance, run *Run, cfg *config.Pr
 		}()
 	}
 
+	// Find the task config for load/save handling
+	var tc *config.TaskConfig
+	for i := range cfg.Tasks {
+		if cfg.Tasks[i].Name == ti.Name {
+			tc = &cfg.Tasks[i]
+			break
+		}
+	}
+
+	// Handle load/save SQL task types
+	if tc != nil && (tc.Type == "load" || tc.Type == "save") {
+		// Set up log file for load/save tasks
+		logPath := filepath.Join(run.LogDir, ti.Name+".log")
+		logFile, err := os.Create(logPath)
+		if err != nil {
+			run.mu.Lock()
+			ti.Status = StatusFailed
+			ti.Error = fmt.Errorf("creating log file: %w", err)
+			ti.EndedAt = time.Now()
+			run.mu.Unlock()
+			return
+		}
+		defer logFile.Close()
+
+		writers := []io.Writer{logFile}
+		if opts.Verbose {
+			isConcurrent := len(concurrent) > 0 && concurrent[0]
+			if isConcurrent {
+				writers = append(writers, &prefixWriter{
+					prefix: []byte("[" + ti.Name + "] "),
+					dest:   os.Stdout,
+				})
+			} else {
+				writers = append(writers, os.Stdout)
+			}
+		}
+		if opts.LogHub != nil {
+			hubWriter := loghub.NewWriter(opts.LogHub, run.ID, run.DAGName, ti.Name, 1)
+			writers = append(writers, hubWriter)
+		}
+		var logWriter io.Writer = logFile
+		if len(writers) > 1 {
+			logWriter = io.MultiWriter(writers...)
+		}
+
+		err = executeSQLTask(ctx, ti, run, cfg, tc, opts, logWriter)
+		run.mu.Lock()
+		if err != nil {
+			ti.Status = StatusFailed
+			ti.Error = err
+		} else {
+			ti.Status = StatusSuccess
+		}
+		ti.Attempt = 1
+		ti.EndedAt = time.Now()
+		run.mu.Unlock()
+		return
+	}
+
 	scriptPath := filepath.Join(run.SnapshotDir, ti.Script)
 
 	// Resolve the runner — dbt is special-cased since it needs config + profiles
@@ -663,6 +737,71 @@ func printSummary(w io.Writer, run *Run) {
 	fmt.Fprintln(w)
 }
 
+// buildTasksFromCompileResult converts a transform CompileResult into a merged task list.
+// Ephemeral models are excluded. Model tasks are built from the DAG order, with settings
+// merged from any matching explicit task in existingTasks. Non-model tasks from
+// existingTasks are appended after all model tasks.
+func buildTasksFromCompileResult(result *transform.CompileResult, existingTasks []config.TaskConfig) []config.TaskConfig {
+	var modelTasks []config.TaskConfig
+	for _, name := range result.Order {
+		cm, ok := result.Models[name]
+		if !ok {
+			continue // ephemeral model, no compiled output
+		}
+		tc := config.TaskConfig{
+			Name:   name,
+			Script: filepath.Join("compiled_models", name+".sql"),
+			Runner: "sql",
+		}
+		// Inherit dependencies from the model DAG, excluding ephemeral models.
+		// Ephemerals are inlined as CTEs and produce no executable tasks, so
+		// leaving their names in DependsOn would create unresolvable references.
+		deps := result.DAG.DependsOn(name)
+		var filteredDeps []string
+		for _, dep := range deps {
+			if _, isCompiled := result.Models[dep]; isCompiled {
+				filteredDeps = append(filteredDeps, dep)
+			}
+		}
+		tc.DependsOn = filteredDeps
+
+		// Merge with any explicit task config from pit.toml (timeout, retries, etc.)
+		for _, explicit := range existingTasks {
+			if explicit.Name == name {
+				if explicit.Timeout.Duration > 0 {
+					tc.Timeout = explicit.Timeout
+				}
+				if explicit.Retries > 0 {
+					tc.Retries = explicit.Retries
+				}
+				if explicit.RetryDelay.Duration > 0 {
+					tc.RetryDelay = explicit.RetryDelay
+				}
+				break
+			}
+		}
+
+		if cm.Config.Connection != "" {
+			tc.Connection = cm.Config.Connection
+		}
+
+		modelTasks = append(modelTasks, tc)
+	}
+
+	// Append non-model tasks from pit.toml (Python tasks, shell tasks, etc.)
+	modelNames := make(map[string]bool, len(result.Order))
+	for _, name := range result.Order {
+		modelNames[name] = true
+	}
+	for _, tc := range existingTasks {
+		if !modelNames[tc.Name] {
+			modelTasks = append(modelTasks, tc)
+		}
+	}
+
+	return modelTasks
+}
+
 // makeLoadDataHandler returns a HandlerFunc that loads Parquet files into databases.
 func makeLoadDataHandler(store *secrets.Store, dagName string, dataDir string) sdk.HandlerFunc {
 	return func(ctx context.Context, params map[string]string) (string, error) {
@@ -683,10 +822,6 @@ func makeLoadDataHandler(store *secrets.Store, dagName string, dataDir string) s
 			return "", fmt.Errorf("secrets store not configured (use --secrets flag)")
 		}
 
-		schema := params["schema"]
-		if schema == "" {
-			schema = "dbo"
-		}
 		mode := params["mode"]
 		if mode == "" {
 			mode = "append"
@@ -711,6 +846,14 @@ func makeLoadDataHandler(store *secrets.Store, dagName string, dataDir string) s
 			return "", fmt.Errorf("resolving connection %q: %w", connKey, err)
 		}
 
+		schema := params["schema"]
+		if schema == "" {
+			driverName, _ := runner.DetectDriver(connStr)
+			if drv, drvErr := loader.GetDriver(driverName); drvErr == nil {
+				schema = drv.DefaultSchema()
+			}
+		}
+
 		rows, err := loader.Load(ctx, loader.LoadParams{
 			FilePath: absFile,
 			Table:    table,
@@ -724,6 +867,86 @@ func makeLoadDataHandler(store *secrets.Store, dagName string, dataDir string) s
 
 		return fmt.Sprintf("%d rows loaded", rows), nil
 	}
+}
+
+// resolveTaskConnection returns the connection key for a task, falling back to DAG default.
+func resolveTaskConnection(tc *config.TaskConfig, cfg *config.ProjectConfig) string {
+	if tc.Connection != "" {
+		return tc.Connection
+	}
+	return cfg.DAG.SQL.Connection
+}
+
+// parseSchemaTable splits "schema.table" into schema and table parts.
+// If no dot, returns empty schema and the full string as table.
+func parseSchemaTable(fqTable string) (string, string) {
+	parts := strings.SplitN(fqTable, ".", 2)
+	if len(parts) == 2 {
+		return parts[0], parts[1]
+	}
+	return "", parts[0]
+}
+
+// executeSQLTask handles load and save task types.
+func executeSQLTask(ctx context.Context, ti *TaskInstance, run *Run, cfg *config.ProjectConfig, tc *config.TaskConfig, opts ExecuteOpts, logWriter io.Writer) error {
+	connKey := resolveTaskConnection(tc, cfg)
+	if connKey == "" {
+		return fmt.Errorf("no connection configured (set connection on task or [dag.sql])")
+	}
+	if run.SecretsResolver == nil {
+		return fmt.Errorf("secrets store not configured (use --secrets flag)")
+	}
+
+	connStr, err := run.SecretsResolver.Resolve(run.DAGName, connKey)
+	if err != nil {
+		return fmt.Errorf("resolving connection %q: %w", connKey, err)
+	}
+
+	start := time.Now()
+
+	switch tc.Type {
+	case "load":
+		sourcePath := filepath.Join(run.DataDir, tc.Source)
+		schema, table := parseSchemaTable(tc.Table)
+		mode := tc.Mode
+		if mode == "" {
+			mode = "append"
+		}
+		rows, err := loader.Load(ctx, loader.LoadParams{
+			FilePath: sourcePath,
+			Table:    table,
+			Schema:   schema,
+			Mode:     loader.LoadMode(mode),
+			ConnStr:  connStr,
+		})
+		if err != nil {
+			return fmt.Errorf("loading data: %w", err)
+		}
+		elapsed := time.Since(start)
+		fmt.Fprintf(logWriter, "[load] %s -> %s: %d rows loaded in %s\n",
+			tc.Source, tc.Table, rows, elapsed.Round(time.Millisecond))
+
+	case "save":
+		scriptPath := filepath.Join(run.SnapshotDir, tc.Script)
+		query, err := os.ReadFile(scriptPath)
+		if err != nil {
+			return fmt.Errorf("reading SQL script %s: %w", tc.Script, err)
+		}
+		outputPath := filepath.Join(run.DataDir, tc.Output)
+		rows, err := loader.Save(ctx, loader.SaveParams{
+			Query:    string(query),
+			FilePath: outputPath,
+			ConnStr:  connStr,
+		})
+		if err != nil {
+			return fmt.Errorf("saving data: %w", err)
+		}
+		elapsed := time.Since(start)
+		fmt.Fprintf(logWriter, "[save] %s -> %s: %d rows saved in %s\n",
+			tc.Script, tc.Output, rows, elapsed.Round(time.Millisecond))
+	}
+
+	return nil
 }
 
 // hashFile returns the SHA-256 hex digest of the file at path, or "" on error.

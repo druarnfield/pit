@@ -18,13 +18,14 @@ const (
 	TypePython ProjectType = "python"
 	TypeSQL    ProjectType = "sql"
 	TypeShell  ProjectType = "shell"
-	TypeDBT    ProjectType = "dbt"
+	TypeDBT       ProjectType = "dbt"
+	TypeTransform ProjectType = "transform"
 )
 
 // ValidType returns true if the given type string is supported.
 func ValidType(t string) bool {
 	switch ProjectType(t) {
-	case TypePython, TypeSQL, TypeShell, TypeDBT:
+	case TypePython, TypeSQL, TypeShell, TypeDBT, TypeTransform:
 		return true
 	}
 	return false
@@ -50,6 +51,8 @@ func Create(rootDir, name string, projectType ProjectType) error {
 		return createShell(projectDir, name)
 	case TypeDBT:
 		return createDBT(projectDir, name)
+	case TypeTransform:
+		return createTransform(projectDir, name)
 	default:
 		return fmt.Errorf("unknown project type %q", projectType)
 	}
@@ -224,6 +227,55 @@ echo "Hello from %s!"
 `, name, name)
 }
 
+func createTransform(projectDir, name string) error {
+	dirs := []string{
+		projectDir,
+		filepath.Join(projectDir, "models"),
+	}
+	if err := mkdirs(dirs); err != nil {
+		return err
+	}
+
+	files := map[string]string{
+		filepath.Join(projectDir, "pit.toml"):                  pitTomlTransform(name),
+		filepath.Join(projectDir, "models", "defaults.toml"):   defaultsTomlTransform(),
+		filepath.Join(projectDir, "models", "example_model.sql"): exampleModelSQL(),
+	}
+	return writeFiles(files)
+}
+
+func pitTomlTransform(name string) string {
+	return fmt.Sprintf(`[dag]
+name = %q
+# schedule = "0 7 * * *"
+# overlap = "skip"
+# timeout = "30m"
+
+[dag.sql]
+connection = "warehouse_db"
+
+[dag.transform]
+dialect = "mssql"
+`, name)
+}
+
+func defaultsTomlTransform() string {
+	return `[defaults]
+materialization = "view"
+schema = "dbo"
+`
+}
+
+func exampleModelSQL() string {
+	return `SELECT
+    id,
+    name,
+    created_at
+FROM raw.example_table
+WHERE is_active = 1
+`
+}
+
 func createDBT(projectDir, name string) error {
 	dirs := []string{
 		projectDir,
@@ -315,6 +367,7 @@ func workspaceGitignore() string {
 	return `runs/
 .venv/
 repo_cache/
+compiled_models/
 *.db
 secrets/
 `

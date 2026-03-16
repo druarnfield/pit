@@ -81,13 +81,18 @@ func (r *SQLRunner) runStub(ctx context.Context, rc RunContext, logFile io.Write
 }
 
 // DetectDriver determines the database/sql driver name from a connection string.
-// Returns "mssql" for sqlserver:// or mssql:// URIs.
 func DetectDriver(connStr string) (string, error) {
 	lower := strings.ToLower(connStr)
 	switch {
 	case strings.HasPrefix(lower, "sqlserver://"), strings.HasPrefix(lower, "mssql://"):
 		return "mssql", nil
+	case strings.HasPrefix(lower, "postgres://"), strings.HasPrefix(lower, "postgresql://"):
+		return "postgres", nil
+	case strings.HasPrefix(lower, "clickhouse://"):
+		return "clickhouse", nil
+	case strings.HasPrefix(lower, "oracle://"):
+		return "oracle", nil
 	default:
-		return "", fmt.Errorf("cannot detect SQL driver from connection string (expected sqlserver:// or mssql://)")
+		return "", fmt.Errorf("cannot detect SQL driver from connection string (supported: sqlserver://, postgres://, clickhouse://, oracle://)")
 	}
 }

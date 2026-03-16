@@ -6,35 +6,27 @@ import (
 	"fmt"
 )
 
-// TableExistsQuery returns a SQL query that checks if a table exists (MSSQL).
-func TableExistsQuery(schema, table string) string {
-	return fmt.Sprintf(
-		"SELECT CASE WHEN OBJECT_ID('[%s].[%s]', 'U') IS NOT NULL THEN 1 ELSE 0 END",
-		schema, table,
-	)
-}
-
-// ColumnsQuery returns a SQL query to get column names from INFORMATION_SCHEMA (MSSQL).
-func ColumnsQuery(schema, table string) string {
-	return fmt.Sprintf(
-		"SELECT COLUMN_NAME FROM INFORMATION_SCHEMA.COLUMNS WHERE TABLE_SCHEMA = '%s' AND TABLE_NAME = '%s' ORDER BY ORDINAL_POSITION",
-		schema, table,
-	)
-}
-
-// TableExists checks whether a table exists in the database.
+// TableExists checks whether a table exists in the database using a
+// parameterized query to prevent SQL injection.
 func TableExists(ctx context.Context, db *sql.DB, schema, table string) (bool, error) {
-	var exists int
-	err := db.QueryRowContext(ctx, TableExistsQuery(schema, table)).Scan(&exists)
+	var count int
+	err := db.QueryRowContext(ctx,
+		"SELECT COUNT(*) FROM INFORMATION_SCHEMA.TABLES WHERE TABLE_SCHEMA = @p1 AND TABLE_NAME = @p2",
+		schema, table,
+	).Scan(&count)
 	if err != nil {
 		return false, fmt.Errorf("checking table existence [%s].[%s]: %w", schema, table, err)
 	}
-	return exists == 1, nil
+	return count > 0, nil
 }
 
-// GetColumns retrieves column names for a table from INFORMATION_SCHEMA.
+// GetColumns retrieves column names for a table from INFORMATION_SCHEMA using
+// a parameterized query to prevent SQL injection.
 func GetColumns(ctx context.Context, db *sql.DB, schema, table string) ([]string, error) {
-	rows, err := db.QueryContext(ctx, ColumnsQuery(schema, table))
+	rows, err := db.QueryContext(ctx,
+		"SELECT COLUMN_NAME FROM INFORMATION_SCHEMA.COLUMNS WHERE TABLE_SCHEMA = @p1 AND TABLE_NAME = @p2 ORDER BY ORDINAL_POSITION",
+		schema, table,
+	)
 	if err != nil {
 		return nil, fmt.Errorf("querying columns for [%s].[%s]: %w", schema, table, err)
 	}

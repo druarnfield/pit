@@ -125,9 +125,12 @@ func (d *OracleDriver) CreateTable(ctx context.Context, db *sql.DB, schema, tabl
 // DropTable drops a table if it exists using PL/SQL to suppress ORA-00942.
 func (d *OracleDriver) DropTable(ctx context.Context, db *sql.DB, schema, table string) error {
 	ref := d.qualifiedTable(schema, table)
+	// Escape single quotes in the identifier so it can be safely embedded
+	// inside a PL/SQL string literal (single quote is doubled per SQL standard).
+	escapedRef := strings.ReplaceAll(ref, "'", "''")
 	dropSQL := fmt.Sprintf(
 		"BEGIN EXECUTE IMMEDIATE 'DROP TABLE %s'; EXCEPTION WHEN OTHERS THEN IF SQLCODE != -942 THEN RAISE; END IF; END;",
-		ref,
+		escapedRef,
 	)
 	if _, err := db.ExecContext(ctx, dropSQL); err != nil {
 		return fmt.Errorf("dropping table: %w", err)

@@ -32,13 +32,27 @@ func Compile(modelsDir, dialect, outDir string, tasks []config.TaskConfig) (*Com
 		return nil, fmt.Errorf("parsing model configs: %w", err)
 	}
 
-	// 2. Validate: every model must have a materialization and schema
+	// 2. Validate model configs
 	for name, cfg := range configs {
 		if cfg.Materialization == "" {
 			return nil, fmt.Errorf("model %q has no materialization configured", name)
 		}
-		if cfg.Schema == "" {
+		// Ephemeral models are inlined as CTEs and have no target table, so
+		// schema is not required.
+		if cfg.Materialization != "ephemeral" && cfg.Schema == "" {
 			return nil, fmt.Errorf("model %q has no schema configured", name)
+		}
+		if cfg.Materialization == "incremental" {
+			if len(cfg.UniqueKey) == 0 {
+				return nil, fmt.Errorf("model %q is incremental but has no unique_key configured", name)
+			}
+			strategy := cfg.Strategy
+			if strategy == "" {
+				strategy = "merge"
+			}
+			if strategy == "merge" && len(cfg.Columns) == 0 {
+				return nil, fmt.Errorf("model %q uses incremental merge strategy but has no columns configured", name)
+			}
 		}
 	}
 
@@ -105,11 +119,13 @@ func Compile(modelsDir, dialect, outDir string, tasks []config.TaskConfig) (*Com
 		// Build materialization context
 		this := QualifiedName(cfg.Schema, name)
 		matCtx := &MaterializeContext{
-			ModelName: name,
-			Schema:    cfg.Schema,
-			SQL:       rendered,
-			UniqueKey: cfg.UniqueKey,
-			This:      this,
+			ModelName:     name,
+			Schema:        cfg.Schema,
+			SQL:           rendered,
+			UniqueKey:     cfg.UniqueKey,
+			This:          this,
+			Columns:       cfg.Columns,
+			UpdateColumns: BuildUpdateColumns(cfg.Columns, cfg.UniqueKey),
 		}
 
 		// Apply materialization template

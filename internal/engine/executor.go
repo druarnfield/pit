@@ -24,20 +24,20 @@ import (
 
 // ExecuteOpts configures a DAG execution.
 type ExecuteOpts struct {
-	RunsDir       string   // directory for run snapshots (default: "runs")
-	RepoCacheDir  string   // directory for persistent git clones (default: "repo_cache")
-	TaskName      string   // if set, only run this single task
-	Verbose       bool     // stream task output to stdout
-	Concurrency   int      // max parallel tasks (0 = unlimited)
-	SecretsPath   string   // path to secrets.toml (optional, empty = no secrets)
-	AgeIdentity   string   // path to age identity file (optional, for encrypted secrets)
-	DataSeedDir   string   // if set, copy contents into data dir before execution
-	DBTDriver     string   // ODBC driver for dbt profiles (default: config.DefaultDBTDriver)
-	KeepArtifacts []string           // which run subdirs to keep after completion (default: all)
-	MetaStore     MetadataRecorder   // nil = no metadata tracking
-	Trigger       string             // trigger source: "manual", "cron", "ftp_watch", "webhook"
-	LogHub        *loghub.Hub        // nil = no live log streaming
-	RunID         string             // if set, use this instead of generating (for webhook streaming)
+	RunsDir       string           // directory for run snapshots (default: "runs")
+	RepoCacheDir  string           // directory for persistent git clones (default: "repo_cache")
+	TaskName      string           // if set, only run this single task
+	Verbose       bool             // stream task output to stdout
+	Concurrency   int              // max parallel tasks (0 = unlimited)
+	SecretsPath   string           // path to secrets.toml (optional, empty = no secrets)
+	AgeIdentity   string           // path to age identity file (optional, for encrypted secrets)
+	DataSeedDir   string           // if set, copy contents into data dir before execution
+	DBTDriver     string           // ODBC driver for dbt profiles (default: config.DefaultDBTDriver)
+	KeepArtifacts []string         // which run subdirs to keep after completion (default: all)
+	MetaStore     MetadataRecorder // nil = no metadata tracking
+	Trigger       string           // trigger source: "manual", "cron", "ftp_watch", "webhook"
+	LogHub        *loghub.Hub      // nil = no live log streaming
+	RunID         string           // if set, use this instead of generating (for webhook streaming)
 }
 
 // Execute runs a DAG to completion.
@@ -152,57 +152,7 @@ func Execute(ctx context.Context, cfg *config.ProjectConfig, opts ExecuteOpts) (
 			return nil, fmt.Errorf("compiling transform models: %w", err)
 		}
 
-		// Convert compiled models to task configs
-		var modelTasks []config.TaskConfig
-		for _, name := range compileResult.Order {
-			cm, ok := compileResult.Models[name]
-			if !ok {
-				continue // ephemeral model, skipped
-			}
-			tc := config.TaskConfig{
-				Name:   name,
-				Script: filepath.Join("compiled_models", name+".sql"),
-				Runner: "sql",
-			}
-			// Inherit dependencies from the model DAG
-			tc.DependsOn = compileResult.DAG.DependsOn(name)
-
-			// Merge with any explicit task config from pit.toml (timeout, retries, etc.)
-			for _, explicit := range cfg.Tasks {
-				if explicit.Name == name {
-					if explicit.Timeout.Duration > 0 {
-						tc.Timeout = explicit.Timeout
-					}
-					if explicit.Retries > 0 {
-						tc.Retries = explicit.Retries
-					}
-					if explicit.RetryDelay.Duration > 0 {
-						tc.RetryDelay = explicit.RetryDelay
-					}
-					break
-				}
-			}
-
-			if cm.Config.Connection != "" {
-				tc.Connection = cm.Config.Connection
-			}
-
-			modelTasks = append(modelTasks, tc)
-		}
-
-		// Add non-model tasks from pit.toml (Python tasks, shell tasks, etc.)
-		modelNames := make(map[string]bool)
-		for _, name := range compileResult.Order {
-			modelNames[name] = true
-		}
-		for _, tc := range cfg.Tasks {
-			if !modelNames[tc.Name] {
-				modelTasks = append(modelTasks, tc)
-			}
-		}
-
-		// Replace task list with merged models + tasks
-		cfg.Tasks = modelTasks
+		cfg.Tasks = buildTasksFromCompileResult(compileResult, cfg.Tasks)
 	}
 
 	// Build Run from config
@@ -787,6 +737,71 @@ func printSummary(w io.Writer, run *Run) {
 	fmt.Fprintln(w)
 }
 
+// buildTasksFromCompileResult converts a transform CompileResult into a merged task list.
+// Ephemeral models are excluded. Model tasks are built from the DAG order, with settings
+// merged from any matching explicit task in existingTasks. Non-model tasks from
+// existingTasks are appended after all model tasks.
+func buildTasksFromCompileResult(result *transform.CompileResult, existingTasks []config.TaskConfig) []config.TaskConfig {
+	var modelTasks []config.TaskConfig
+	for _, name := range result.Order {
+		cm, ok := result.Models[name]
+		if !ok {
+			continue // ephemeral model, no compiled output
+		}
+		tc := config.TaskConfig{
+			Name:   name,
+			Script: filepath.Join("compiled_models", name+".sql"),
+			Runner: "sql",
+		}
+		// Inherit dependencies from the model DAG, excluding ephemeral models.
+		// Ephemerals are inlined as CTEs and produce no executable tasks, so
+		// leaving their names in DependsOn would create unresolvable references.
+		deps := result.DAG.DependsOn(name)
+		var filteredDeps []string
+		for _, dep := range deps {
+			if _, isCompiled := result.Models[dep]; isCompiled {
+				filteredDeps = append(filteredDeps, dep)
+			}
+		}
+		tc.DependsOn = filteredDeps
+
+		// Merge with any explicit task config from pit.toml (timeout, retries, etc.)
+		for _, explicit := range existingTasks {
+			if explicit.Name == name {
+				if explicit.Timeout.Duration > 0 {
+					tc.Timeout = explicit.Timeout
+				}
+				if explicit.Retries > 0 {
+					tc.Retries = explicit.Retries
+				}
+				if explicit.RetryDelay.Duration > 0 {
+					tc.RetryDelay = explicit.RetryDelay
+				}
+				break
+			}
+		}
+
+		if cm.Config.Connection != "" {
+			tc.Connection = cm.Config.Connection
+		}
+
+		modelTasks = append(modelTasks, tc)
+	}
+
+	// Append non-model tasks from pit.toml (Python tasks, shell tasks, etc.)
+	modelNames := make(map[string]bool, len(result.Order))
+	for _, name := range result.Order {
+		modelNames[name] = true
+	}
+	for _, tc := range existingTasks {
+		if !modelNames[tc.Name] {
+			modelTasks = append(modelTasks, tc)
+		}
+	}
+
+	return modelTasks
+}
+
 // makeLoadDataHandler returns a HandlerFunc that loads Parquet files into databases.
 func makeLoadDataHandler(store *secrets.Store, dagName string, dataDir string) sdk.HandlerFunc {
 	return func(ctx context.Context, params map[string]string) (string, error) {
@@ -836,9 +851,6 @@ func makeLoadDataHandler(store *secrets.Store, dagName string, dataDir string) s
 			driverName, _ := runner.DetectDriver(connStr)
 			if drv, drvErr := loader.GetDriver(driverName); drvErr == nil {
 				schema = drv.DefaultSchema()
-			}
-			if schema == "" {
-				schema = "dbo"
 			}
 		}
 

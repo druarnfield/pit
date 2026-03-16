@@ -50,7 +50,11 @@ func writeRowsToParquet(rows *sql.Rows, schema *arrow.Schema, filePath string) (
 
 			for i, sv := range scanVals {
 				val := *(sv.(*interface{}))
-				appendToBuilder(builder.Field(i), schema.Field(i).Type, val)
+				if err := appendToBuilder(builder.Field(i), schema.Field(i).Type, val); err != nil {
+					builder.Release()
+					writer.Close()
+					return totalRows, fmt.Errorf("row %d col %d: %w", totalRows+batchRows, i, err)
+				}
 			}
 			batchRows++
 		}
@@ -85,10 +89,11 @@ func writeRowsToParquet(rows *sql.Rows, schema *arrow.Schema, filePath string) (
 }
 
 // appendToBuilder appends a scanned database value to the appropriate Arrow builder.
-func appendToBuilder(fb array.Builder, dt arrow.DataType, val interface{}) {
+// Returns an error if the builder type is not supported.
+func appendToBuilder(fb array.Builder, dt arrow.DataType, val interface{}) error {
 	if val == nil {
 		fb.AppendNull()
-		return
+		return nil
 	}
 
 	switch b := fb.(type) {
@@ -132,13 +137,18 @@ func appendToBuilder(fb array.Builder, dt arrow.DataType, val interface{}) {
 			b.Append([]byte(fmt.Sprintf("%v", val)))
 		}
 	default:
-		fb.AppendNull()
+		return fmt.Errorf("unsupported builder type %T for Arrow type %s", fb, dt)
 	}
+	return nil
 }
 
 func toInt8(v interface{}) int8 {
 	switch v := v.(type) {
 	case int64:
+		return int8(v)
+	case int32:
+		return int8(v)
+	case int:
 		return int8(v)
 	case float64:
 		return int8(v)
@@ -153,6 +163,10 @@ func toInt16(v interface{}) int16 {
 	switch v := v.(type) {
 	case int64:
 		return int16(v)
+	case int32:
+		return int16(v)
+	case int:
+		return int16(v)
 	case float64:
 		return int16(v)
 	case int16:
@@ -166,10 +180,12 @@ func toInt32(v interface{}) int32 {
 	switch v := v.(type) {
 	case int64:
 		return int32(v)
-	case float64:
-		return int32(v)
 	case int32:
 		return v
+	case int:
+		return int32(v)
+	case float64:
+		return int32(v)
 	default:
 		return 0
 	}
@@ -179,9 +195,11 @@ func toInt64(v interface{}) int64 {
 	switch v := v.(type) {
 	case int64:
 		return v
-	case float64:
-		return int64(v)
 	case int32:
+		return int64(v)
+	case int:
+		return int64(v)
+	case float64:
 		return int64(v)
 	default:
 		return 0
@@ -191,6 +209,10 @@ func toInt64(v interface{}) int64 {
 func toUint8(v interface{}) uint8 {
 	switch v := v.(type) {
 	case int64:
+		return uint8(v)
+	case int32:
+		return uint8(v)
+	case int:
 		return uint8(v)
 	case float64:
 		return uint8(v)
@@ -205,6 +227,10 @@ func toUint16(v interface{}) uint16 {
 	switch v := v.(type) {
 	case int64:
 		return uint16(v)
+	case int32:
+		return uint16(v)
+	case int:
+		return uint16(v)
 	case float64:
 		return uint16(v)
 	default:
@@ -216,6 +242,10 @@ func toUint32(v interface{}) uint32 {
 	switch v := v.(type) {
 	case int64:
 		return uint32(v)
+	case int32:
+		return uint32(v)
+	case int:
+		return uint32(v)
 	case float64:
 		return uint32(v)
 	default:
@@ -226,6 +256,10 @@ func toUint32(v interface{}) uint32 {
 func toUint64(v interface{}) uint64 {
 	switch v := v.(type) {
 	case int64:
+		return uint64(v)
+	case int32:
+		return uint64(v)
+	case int:
 		return uint64(v)
 	case uint64:
 		return v
@@ -242,6 +276,10 @@ func toFloat32(v interface{}) float32 {
 		return float32(v)
 	case float32:
 		return v
+	case int64:
+		return float32(v)
+	case int:
+		return float32(v)
 	default:
 		return 0
 	}
@@ -255,6 +293,10 @@ func toFloat64(v interface{}) float64 {
 		return float64(v)
 	case int64:
 		return float64(v)
+	case int32:
+		return float64(v)
+	case int:
+		return float64(v)
 	default:
 		return 0
 	}
@@ -265,6 +307,8 @@ func toBool(v interface{}) bool {
 	case bool:
 		return v
 	case int64:
+		return v != 0
+	case int:
 		return v != 0
 	default:
 		return false

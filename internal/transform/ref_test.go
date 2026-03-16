@@ -55,6 +55,16 @@ func TestExtractRefs(t *testing.T) {
 			sql:  `SELECT * FROM {{ ref "stg_orders" }} JOIN {{ ref "stg_customers" }} ON 1=1 UNION SELECT * FROM {{ ref "stg_orders" }}`,
 			want: []string{"stg_orders", "stg_customers"},
 		},
+		{
+			name: "single-quoted ref",
+			sql:  `SELECT * FROM {{ ref 'stg_orders' }}`,
+			want: []string{"stg_orders"},
+		},
+		{
+			name: "mixed quote styles",
+			sql:  `SELECT * FROM {{ ref "stg_orders" }} JOIN {{ ref 'stg_customers' }} ON 1=1`,
+			want: []string{"stg_orders", "stg_customers"},
+		},
 	}
 
 	for _, tt := range tests {

@@ -14,6 +14,7 @@ type ModelConfig struct {
 	Materialization string   `toml:"materialization"`
 	Strategy        string   `toml:"strategy"`   // "merge" or "delete_insert" (incremental only)
 	UniqueKey       []string `toml:"unique_key"` // columns for incremental match
+	Columns         []string `toml:"columns"`    // all column names (required for incremental merge)
 	Schema          string   `toml:"schema"`     // target schema
 	Connection      string   `toml:"connection"` // override [dag.sql].connection
 	SQLPath         string   // absolute path to the .sql file (set during discovery)
@@ -206,6 +207,9 @@ func mergeConfig(base, overlay *ModelConfig) *ModelConfig {
 	}
 	if len(overlay.UniqueKey) > 0 {
 		result.UniqueKey = overlay.UniqueKey
+	}
+	if len(overlay.Columns) > 0 {
+		result.Columns = overlay.Columns
 	}
 	if overlay.Schema != "" {
 		result.Schema = overlay.Schema

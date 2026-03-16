@@ -4,10 +4,11 @@ import (
 	"context"
 	"database/sql"
 	"fmt"
+	"strconv"
 	"strings"
 
-	"github.com/apache/arrow-go/v18/arrow"
 	_ "github.com/ClickHouse/clickhouse-go/v2"
+	"github.com/apache/arrow-go/v18/arrow"
 )
 
 // ClickHouseDriver implements the Driver interface for ClickHouse.
@@ -93,12 +94,32 @@ func (d *ClickHouseDriver) SQLTypeToArrow(dbTypeName string) (arrow.DataType, er
 	case "Date", "Date32":
 		return arrow.FixedWidthTypes.Date32, nil
 	default:
-		// Handle FixedString(N) and DateTime64(N) variants.
+		// Handle FixedString(N) variants.
 		if strings.HasPrefix(name, "FixedString") {
 			return arrow.BinaryTypes.String, nil
 		}
-		if strings.HasPrefix(name, "DateTime64") || name == "DateTime" {
+		// Handle DateTime (no precision) as microseconds.
+		if name == "DateTime" {
 			return &arrow.TimestampType{Unit: arrow.Microsecond}, nil
+		}
+		// Handle DateTime64(N) — parse the precision to choose the Arrow unit.
+		// ClickHouse precision: 0=seconds, 1-3=milliseconds, 4-6=microseconds, 7-9=nanoseconds.
+		if strings.HasPrefix(name, "DateTime64(") && strings.HasSuffix(name, ")") {
+			inner := name[len("DateTime64(") : len(name)-1]
+			precision, err := strconv.Atoi(strings.TrimSpace(inner))
+			if err != nil {
+				return &arrow.TimestampType{Unit: arrow.Microsecond}, nil
+			}
+			switch {
+			case precision == 0:
+				return &arrow.TimestampType{Unit: arrow.Second}, nil
+			case precision <= 3:
+				return &arrow.TimestampType{Unit: arrow.Millisecond}, nil
+			case precision <= 6:
+				return &arrow.TimestampType{Unit: arrow.Microsecond}, nil
+			default:
+				return &arrow.TimestampType{Unit: arrow.Nanosecond}, nil
+			}
 		}
 		return nil, fmt.Errorf("unsupported ClickHouse type %q for Arrow mapping", dbTypeName)
 	}

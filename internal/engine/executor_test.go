@@ -137,6 +137,10 @@ func TestBuildTasksFromCompileResult_EphemeralSkipped(t *testing.T) {
 	if tasks[0].Name != "fct_orders" {
 		t.Errorf("tasks[0].Name = %q, want fct_orders", tasks[0].Name)
 	}
+	// Ephemeral model names must not appear in DependsOn — they produce no tasks.
+	if len(tasks[0].DependsOn) != 0 {
+		t.Errorf("fct_orders.DependsOn = %v, want empty (ephemeral deps filtered out)", tasks[0].DependsOn)
+	}
 }
 
 func TestBuildTasksFromCompileResult_NonModelTasksPreserved(t *testing.T) {

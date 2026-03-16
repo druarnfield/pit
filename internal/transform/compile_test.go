@@ -69,6 +69,79 @@ func TestCompile_FullPipeline(t *testing.T) {
 	}
 }
 
+func TestCompile_EphemeralDoesNotRequireSchema(t *testing.T) {
+	dir := t.TempDir()
+	modelsDir := filepath.Join(dir, "models")
+	if err := os.MkdirAll(modelsDir, 0o755); err != nil {
+		t.Fatalf("setup: %v", err)
+	}
+	// Write an ephemeral model with no schema in the TOML.
+	if err := os.WriteFile(filepath.Join(modelsDir, "helper.sql"), []byte("SELECT 1"), 0o644); err != nil {
+		t.Fatalf("setup: %v", err)
+	}
+	toml := "[defaults]\nmaterialization = \"ephemeral\"\n"
+	if err := os.WriteFile(filepath.Join(modelsDir, "models.toml"), []byte(toml), 0o644); err != nil {
+		t.Fatalf("setup: %v", err)
+	}
+
+	// Should not error — ephemerals don't need a schema.
+	result, err := Compile(modelsDir, "mssql", t.TempDir(), nil)
+	if err != nil {
+		t.Fatalf("Compile() unexpected error for ephemeral without schema: %v", err)
+	}
+	// Ephemeral models are not emitted to result.Models.
+	if len(result.Models) != 0 {
+		t.Errorf("expected 0 compiled models (ephemeral skipped), got %d", len(result.Models))
+	}
+}
+
+func TestCompile_IncrementalMissingUniqueKey(t *testing.T) {
+	dir := t.TempDir()
+	modelsDir := filepath.Join(dir, "models")
+	if err := os.MkdirAll(modelsDir, 0o755); err != nil {
+		t.Fatalf("setup: %v", err)
+	}
+	if err := os.WriteFile(filepath.Join(modelsDir, "inc.sql"), []byte("SELECT 1"), 0o644); err != nil {
+		t.Fatalf("setup: %v", err)
+	}
+	toml := "[defaults]\nmaterialization = \"incremental\"\nschema = \"dbo\"\n"
+	if err := os.WriteFile(filepath.Join(modelsDir, "models.toml"), []byte(toml), 0o644); err != nil {
+		t.Fatalf("setup: %v", err)
+	}
+
+	_, err := Compile(modelsDir, "mssql", t.TempDir(), nil)
+	if err == nil {
+		t.Fatal("expected error for incremental model without unique_key, got nil")
+	}
+	if !strings.Contains(err.Error(), "unique_key") {
+		t.Errorf("error = %q, want it to contain %q", err, "unique_key")
+	}
+}
+
+func TestCompile_IncrementalMergeMissingColumns(t *testing.T) {
+	dir := t.TempDir()
+	modelsDir := filepath.Join(dir, "models")
+	if err := os.MkdirAll(modelsDir, 0o755); err != nil {
+		t.Fatalf("setup: %v", err)
+	}
+	if err := os.WriteFile(filepath.Join(modelsDir, "inc.sql"), []byte("SELECT 1"), 0o644); err != nil {
+		t.Fatalf("setup: %v", err)
+	}
+	// incremental with merge strategy but no columns
+	toml := "[defaults]\nmaterialization = \"incremental\"\nstrategy = \"merge\"\nschema = \"dbo\"\nunique_key = [\"id\"]\n"
+	if err := os.WriteFile(filepath.Join(modelsDir, "models.toml"), []byte(toml), 0o644); err != nil {
+		t.Fatalf("setup: %v", err)
+	}
+
+	_, err := Compile(modelsDir, "mssql", t.TempDir(), nil)
+	if err == nil {
+		t.Fatal("expected error for incremental merge model without columns, got nil")
+	}
+	if !strings.Contains(err.Error(), "columns") {
+		t.Errorf("error = %q, want it to contain %q", err, "columns")
+	}
+}
+
 func TestCompile_MissingMaterialization(t *testing.T) {
 	dir := t.TempDir()
 	modelsDir := filepath.Join(dir, "models")

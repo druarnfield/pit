@@ -89,6 +89,94 @@ JOIN {{ ref "stg_orders" }} o ON h.order_id = o.order_id`
 	}
 }
 
+func TestRenderModel_SingleQuotedRef(t *testing.T) {
+	models := map[string]*ModelConfig{
+		"stg_orders": {Schema: "staging"},
+		"fct_orders": {Schema: "analytics"},
+	}
+
+	sql := `SELECT * FROM {{ ref 'stg_orders' }}`
+	got, err := RenderModel("fct_orders", sql, models)
+	if err != nil {
+		t.Fatalf("RenderModel() unexpected error: %v", err)
+	}
+
+	want := `SELECT * FROM [staging].[stg_orders]`
+	if got != want {
+		t.Errorf("RenderModel() = %q, want %q", got, want)
+	}
+}
+
+func TestRenderModel_SQLWithLiteralBraces(t *testing.T) {
+	// SQL containing JSON or other literal {{ }} must not be treated as template
+	// directives. Only {{ ref }} and {{ this }} patterns should be replaced.
+	models := map[string]*ModelConfig{
+		"fct_orders": {Schema: "analytics"},
+	}
+
+	// A query that selects a JSON field — literal {{ }} in the SQL must be preserved.
+	sql := `SELECT JSON_VALUE(payload, '$.key') AS val, {{ this }} AS tbl FROM src`
+	got, err := RenderModel("fct_orders", sql, models)
+	if err != nil {
+		t.Fatalf("RenderModel() unexpected error: %v", err)
+	}
+
+	if !strings.Contains(got, "[analytics].[fct_orders]") {
+		t.Errorf("RenderModel() missing resolved this, got:\n%s", got)
+	}
+	// The JSON expression should be unchanged.
+	if !strings.Contains(got, "JSON_VALUE(payload, '$.key')") {
+		t.Errorf("RenderModel() altered non-template content, got:\n%s", got)
+	}
+}
+
+func TestRenderModelWithEphemerals_NestedEphemeral(t *testing.T) {
+	// base_helper is ephemeral; mid_helper is ephemeral and depends on base_helper.
+	// fact_orders depends on mid_helper. CTEs must be emitted in dependency order:
+	// base_helper first, then mid_helper.
+	models := map[string]*ModelConfig{
+		"base_helper": {Schema: "staging", Materialization: "ephemeral"},
+		"mid_helper":  {Schema: "staging", Materialization: "ephemeral"},
+		"fact_orders": {Schema: "analytics", Materialization: "table"},
+	}
+
+	ephemeralSQL := map[string]string{
+		"base_helper": `SELECT id, amount FROM raw.orders`,
+		"mid_helper":  `SELECT id, amount * 1.1 AS adj FROM {{ ref "base_helper" }}`,
+	}
+
+	sql := `SELECT id, adj FROM {{ ref "mid_helper" }}`
+	got, err := RenderModelWithEphemerals("fact_orders", sql, models, ephemeralSQL)
+	if err != nil {
+		t.Fatalf("RenderModelWithEphemerals() error: %v", err)
+	}
+
+	// Both CTEs must be present.
+	if !strings.Contains(got, "__pit_ephemeral_base_helper AS") {
+		t.Errorf("expected base_helper CTE, got:\n%s", got)
+	}
+	if !strings.Contains(got, "__pit_ephemeral_mid_helper AS") {
+		t.Errorf("expected mid_helper CTE, got:\n%s", got)
+	}
+
+	// base_helper must appear before mid_helper (dependency order).
+	baseIdx := strings.Index(got, "__pit_ephemeral_base_helper AS")
+	midIdx := strings.Index(got, "__pit_ephemeral_mid_helper AS")
+	if baseIdx >= midIdx {
+		t.Errorf("base_helper CTE (pos %d) must precede mid_helper CTE (pos %d)", baseIdx, midIdx)
+	}
+
+	// mid_helper's SQL should reference base_helper by CTE alias.
+	if !strings.Contains(got, "FROM __pit_ephemeral_base_helper") {
+		t.Errorf("mid_helper CTE should reference base_helper CTE alias, got:\n%s", got)
+	}
+
+	// Main query should reference mid_helper by CTE alias.
+	if !strings.Contains(got, "FROM __pit_ephemeral_mid_helper") {
+		t.Errorf("main query should reference mid_helper CTE alias, got:\n%s", got)
+	}
+}
+
 func TestRenderModel_MultipleRefs(t *testing.T) {
 	models := map[string]*ModelConfig{
 		"stg_orders":    {Schema: "staging"},

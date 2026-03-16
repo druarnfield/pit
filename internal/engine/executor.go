@@ -753,8 +753,17 @@ func buildTasksFromCompileResult(result *transform.CompileResult, existingTasks 
 			Script: filepath.Join("compiled_models", name+".sql"),
 			Runner: "sql",
 		}
-		// Inherit dependencies from the model DAG
-		tc.DependsOn = result.DAG.DependsOn(name)
+		// Inherit dependencies from the model DAG, excluding ephemeral models.
+		// Ephemerals are inlined as CTEs and produce no executable tasks, so
+		// leaving their names in DependsOn would create unresolvable references.
+		deps := result.DAG.DependsOn(name)
+		var filteredDeps []string
+		for _, dep := range deps {
+			if _, isCompiled := result.Models[dep]; isCompiled {
+				filteredDeps = append(filteredDeps, dep)
+			}
+		}
+		tc.DependsOn = filteredDeps
 
 		// Merge with any explicit task config from pit.toml (timeout, retries, etc.)
 		for _, explicit := range existingTasks {

@@ -205,6 +205,68 @@ func TestBuildTasksFromCompileResult_MergesExplicitConfig(t *testing.T) {
 	}
 }
 
+func TestBuildTasksFromCompileResult_ExplicitDependsOnMerged(t *testing.T) {
+	result := mkCompileResult(t, map[string]string{"stg_orders": "SELECT 1"}, nil)
+
+	existing := []config.TaskConfig{
+		{
+			Name:      "stg_orders",
+			DependsOn: []string{"load_seed_data", "run_setup"},
+		},
+	}
+
+	tasks := buildTasksFromCompileResult(result, existing)
+
+	if len(tasks) != 1 {
+		t.Fatalf("got %d tasks, want 1", len(tasks))
+	}
+	deps := tasks[0].DependsOn
+	found := make(map[string]bool, len(deps))
+	for _, d := range deps {
+		found[d] = true
+	}
+	if !found["load_seed_data"] {
+		t.Errorf("DependsOn missing load_seed_data, got %v", deps)
+	}
+	if !found["run_setup"] {
+		t.Errorf("DependsOn missing run_setup, got %v", deps)
+	}
+}
+
+func TestBuildTasksFromCompileResult_ExplicitDependsOnNoDuplicates(t *testing.T) {
+	result := mkCompileResult(t, map[string]string{
+		"stg_orders": "SELECT 1",
+		"fct_orders": `SELECT * FROM {{ ref "stg_orders" }}`,
+	}, nil)
+
+	// stg_orders is already a DAG dep of fct_orders; it must not be duplicated.
+	existing := []config.TaskConfig{
+		{
+			Name:      "fct_orders",
+			DependsOn: []string{"stg_orders", "load_seed_data"},
+		},
+	}
+
+	tasks := buildTasksFromCompileResult(result, existing)
+
+	byName := make(map[string]config.TaskConfig, len(tasks))
+	for _, tc := range tasks {
+		byName[tc.Name] = tc
+	}
+
+	fct := byName["fct_orders"]
+	seen := make(map[string]int)
+	for _, d := range fct.DependsOn {
+		seen[d]++
+	}
+	if seen["stg_orders"] > 1 {
+		t.Errorf("stg_orders appears %d times in DependsOn, want 1: %v", seen["stg_orders"], fct.DependsOn)
+	}
+	if seen["load_seed_data"] != 1 {
+		t.Errorf("load_seed_data should appear once in DependsOn, got %d: %v", seen["load_seed_data"], fct.DependsOn)
+	}
+}
+
 func TestParseSchemaTable(t *testing.T) {
 	tests := []struct {
 		input      string

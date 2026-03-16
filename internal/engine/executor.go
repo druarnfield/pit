@@ -765,7 +765,8 @@ func buildTasksFromCompileResult(result *transform.CompileResult, existingTasks 
 		}
 		tc.DependsOn = filteredDeps
 
-		// Merge with any explicit task config from pit.toml (timeout, retries, etc.)
+		// Merge with any explicit task config from pit.toml (timeout, retries,
+		// extra depends_on, etc.)
 		for _, explicit := range existingTasks {
 			if explicit.Name == name {
 				if explicit.Timeout.Duration > 0 {
@@ -776,6 +777,19 @@ func buildTasksFromCompileResult(result *transform.CompileResult, existingTasks 
 				}
 				if explicit.RetryDelay.Duration > 0 {
 					tc.RetryDelay = explicit.RetryDelay
+				}
+				// Append any extra depends_on entries declared in pit.toml that
+				// are not already covered by the model's DAG-derived dependencies.
+				if len(explicit.DependsOn) > 0 {
+					existing := make(map[string]bool, len(tc.DependsOn))
+					for _, d := range tc.DependsOn {
+						existing[d] = true
+					}
+					for _, d := range explicit.DependsOn {
+						if !existing[d] {
+							tc.DependsOn = append(tc.DependsOn, d)
+						}
+					}
 				}
 				break
 			}

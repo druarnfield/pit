@@ -194,7 +194,7 @@ runner = "$ node"              # runs: node tasks/transform.js
 | `pit serve [--port N]` | Run the scheduler with cron, FTP watch, webhook triggers, and REST API (default port: 9090) |
 | `pit logs <dag>[/<task>]` | View task logs (`--list` for runs, `--run-id` for specific run) |
 | `pit outputs` | List declared outputs (`--project`, `--type`, `--location` filters) |
-| `pit compile <dag>` | Compile transform models to SQL without executing |
+| `pit compile <dag>` | Compile transform models to SQL without executing (`--stored-procedure` to output as a single stored procedure) |
 | `pit status` | Show latest run status for each DAG (requires metadata store) |
 | `pit secrets keygen` | Generate age identity, print public key |
 | `pit secrets encrypt` | One-time migration from plaintext secrets.toml |
@@ -791,6 +791,20 @@ pit compile my_transforms
 #   stg_orders (view)
 #   fct_orders (table)
 ```
+
+#### Stored Procedure Output
+
+Add `--stored-procedure` to wrap all compiled models into a single SQL stored procedure that executes them in the correct dependency order:
+
+```bash
+pit compile my_transforms --stored-procedure
+# Compiled 4 models to projects/my_transforms/compiled_models
+#   stg_orders (view)
+#   fct_orders (table)
+# Stored procedure written to projects/my_transforms/compiled_models/pit_my_transforms.sql
+```
+
+The generated procedure uses `SET XACT_ABORT ON` and `TRY/CATCH` for error handling. The procedure name defaults to `pit_<dag_name>` in the `dbo` schema.
 
 ### Example Models
 

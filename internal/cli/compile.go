@@ -2,6 +2,7 @@ package cli
 
 import (
 	"fmt"
+	"os"
 	"path/filepath"
 
 	"github.com/druarnfield/pit/internal/config"
@@ -11,7 +12,9 @@ import (
 )
 
 func newCompileCmd() *cobra.Command {
-	return &cobra.Command{
+	var storedProc bool
+
+	cmd := &cobra.Command{
 		Use:   "compile [dag]",
 		Short: "Compile transform models to SQL without executing",
 		Long:  "Renders all models in a transform project, applying materialization templates, and writes the compiled SQL to the compiled_models/ directory.",
@@ -55,7 +58,26 @@ func newCompileCmd() *cobra.Command {
 				}
 			}
 
+			if storedProc {
+				procName := "pit_" + dagName
+				procSQL, err := transform.GenerateStoredProcedure(procName, "dbo", result)
+				if err != nil {
+					return fmt.Errorf("generating stored procedure: %w", err)
+				}
+
+				procPath := filepath.Join(outDir, procName+".sql")
+				if err := os.WriteFile(procPath, []byte(procSQL), 0o644); err != nil {
+					return fmt.Errorf("writing stored procedure: %w", err)
+				}
+
+				fmt.Fprintf(cmd.OutOrStdout(), "Stored procedure written to %s\n", procPath)
+			}
+
 			return nil
 		},
 	}
+
+	cmd.Flags().BoolVar(&storedProc, "stored-procedure", false, "output the pipeline as a single SQL stored procedure")
+
+	return cmd
 }
